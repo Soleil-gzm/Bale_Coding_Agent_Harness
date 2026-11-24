@@ -3,7 +3,13 @@ from pathlib import Path
 from typing import Any
 
 from bale_harness.agent.security import WorkspaceGuard
-from bale_harness.agent.tools.write import EditFileTool, WriteFileTool
+from bale_harness.agent.tools.write import (
+    ApplyPatchTool,
+    DeleteFileTool,
+    EditFileTool,
+    MoveFileTool,
+    WriteFileTool,
+)
 
 
 def _run(tool: Any, arguments: dict[str, Any]):
@@ -119,3 +125,146 @@ def test_edit_file_rejects_missing_file(tmp_path: Path) -> None:
 
     assert result.status == "error"
     assert result.error_code == "not_found"
+
+
+def test_move_file_moves_content(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_bytes(b"hello\n")
+    move = MoveFileTool(WorkspaceGuard(tmp_path))
+
+    result = _run(move, {"source": "a.txt", "destination": "sub/b.txt"})
+
+    assert result.status == "success"
+    assert result.metadata["source"] == "a.txt"
+    assert result.metadata["destination"] == "sub/b.txt"
+    assert not (tmp_path / "a.txt").exists()
+    assert (tmp_path / "sub/b.txt").read_bytes() == b"hello\n"
+
+
+def test_move_file_rejects_existing_destination(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_bytes(b"a\n")
+    (tmp_path / "b.txt").write_bytes(b"b\n")
+    move = MoveFileTool(WorkspaceGuard(tmp_path))
+
+    result = _run(move, {"source": "a.txt", "destination": "b.txt"})
+
+    assert result.status == "error"
+    assert result.error_code == "already_exists"
+    assert (tmp_path / "a.txt").read_bytes() == b"a\n"
+    assert (tmp_path / "b.txt").read_bytes() == b"b\n"
+
+
+def test_move_file_rejects_path_escape(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_bytes(b"a\n")
+    move = MoveFileTool(WorkspaceGuard(tmp_path))
+
+    result = _run(move, {"source": "a.txt", "destination": "../outside.txt"})
+
+    assert result.status == "error"
+    assert result.error_code == "path_escape"
+    assert not (tmp_path.parent / "outside.txt").exists()
+    assert (tmp_path / "a.txt").exists()
+
+
+def test_delete_file_removes_file(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_bytes(b"a\n")
+    delete = DeleteFileTool(WorkspaceGuard(tmp_path))
+
+    result = _run(delete, {"path": "a.txt"})
+
+    assert result.status == "success"
+    assert result.metadata["path"] == "a.txt"
+    assert not (tmp_path / "a.txt").exists()
+
+
+def test_delete_file_rejects_missing_file(tmp_path: Path) -> None:
+    delete = DeleteFileTool(WorkspaceGuard(tmp_path))
+
+    result = _run(delete, {"path": "missing.txt"})
+
+    assert result.status == "error"
+    assert result.error_code == "not_found"
+
+
+def test_delete_file_rejects_directory(tmp_path: Path) -> None:
+    (tmp_path / "sub").mkdir()
+    delete = DeleteFileTool(WorkspaceGuard(tmp_path))
+
+    result = _run(delete, {"path": "sub"})
+
+    assert result.status == "error"
+    assert result.error_code == "not_a_file"
+    assert (tmp_path / "sub").is_dir()
+
+
+def test_delete_file_rejects_path_escape(tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside.txt"
+    outside.write_bytes(b"x\n")
+    delete = DeleteFileTool(WorkspaceGuard(tmp_path))
+
+    result = _run(delete, {"path": "../outside.txt"})
+
+    assert result.status == "error"
+    assert result.error_code == "path_escape"
+    assert outside.exists()
+
+
+def test_apply_patch_applies_multiple_replacements(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_bytes(b"alpha beta gamma\n")
+    patch = ApplyPatchTool(WorkspaceGuard(tmp_path))
+
+    result = _run(
+        patch,
+        {
+            "path": "a.txt",
+            "replacements": [
+                {"old": "alpha", "new": "ALPHA"},
+                {"old": "gamma", "new": "GAMMA"},
+            ],
+        },
+    )
+
+    assert result.status == "success"
+    assert result.metadata["replacements"] == 2
+    assert (tmp_path / "a.txt").read_bytes() == b"ALPHA beta GAMMA\n"
+
+
+def test_apply_patch_missing_old_leaves_file_unchanged(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_bytes(b"alpha beta\n")
+    patch = ApplyPatchTool(WorkspaceGuard(tmp_path))
+
+    result = _run(
+        patch,
+        {
+            "path": "a.txt",
+            "replacements": [
+                {"old": "alpha", "new": "ALPHA"},
+                {"old": "zzz", "new": "Z"},
+            ],
+        },
+    )
+
+    assert result.status == "error"
+    assert result.error_code == "precondition_failed"
+    assert (tmp_path / "a.txt").read_bytes() == b"alpha beta\n"
+
+
+def test_apply_patch_rejects_ambiguous_old(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_bytes(b"x\nx\n")
+    patch = ApplyPatchTool(WorkspaceGuard(tmp_path))
+
+    result = _run(patch, {"path": "a.txt", "replacements": [{"old": "x", "new": "y"}]})
+
+    assert result.status == "error"
+    assert result.error_code == "precondition_failed"
+    assert (tmp_path / "a.txt").read_bytes() == b"x\nx\n"
+
+
+def test_apply_patch_rejects_empty_replacements(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_bytes(b"alpha\n")
+    patch = ApplyPatchTool(WorkspaceGuard(tmp_path))
+
+    result = _run(patch, {"path": "a.txt", "replacements": []})
+
+    assert result.status == "error"
+    assert result.error_code == "invalid_arguments"
+    assert (tmp_path / "a.txt").read_bytes() == b"alpha\n"
