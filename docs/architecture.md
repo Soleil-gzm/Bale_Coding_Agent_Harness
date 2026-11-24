@@ -165,9 +165,11 @@ sequenceDiagram
 
 `stdio` 同时承载协议消息，因此服务代码不应向标准输出写入普通日志。客户端应负责关闭会话并回收子进程。
 
+B9 的客户端实现位于 `agent/tools/mcp.py`：`mcp_tools(configs)` 是异步上下文管理器，负责启动服务、初始化 session、分页拉取工具，并在退出时按逆序关闭；每个工具以 `mcp_<server>_<tool>` 注册到同一个 ToolRegistry。工具默认按写副作用审批，只有配置 `read_only=true` 的服务器才作为只读工具参与并行执行；协议异常映射为 `mcp_error`，工具返回 `isError` 映射为 `mcp_tool_error`。
+
 ## 4. 目标系统分层架构
 
-当前已实现 CLI/HTTP 到 Turn 的构造路径，以及图中的 AgentLoop、ContextBuilder、HistoryTrimmer、ToolRegistry、Approval、Session 与 Checkpoint 的本地版本，并已有本地 JSONL Trace、成本估算与只读 Markdown 报告。MCP Tool Adapter、RepoIndex/Knowledge Retriever 与 Docker Sandbox 仍为后续设计，不是当前目录结构或已有能力。
+当前已实现 CLI/HTTP 到 Turn 的构造路径，以及图中的 AgentLoop、ContextBuilder、HistoryTrimmer、ToolRegistry、Approval、Session 与 Checkpoint 的本地版本，并已有本地 JSONL Trace、成本估算、只读 Markdown 报告、BM25 检索、评测 harness 和 stdio MCP Tool Adapter。Knowledge Retriever、向量检索、HTTP 认证/审批与 Docker Sandbox 仍为后续设计，不是当前目录结构或已有能力。
 
 ```mermaid
 flowchart TB
@@ -227,13 +229,13 @@ flowchart TB
 | `agent/security.py` | 路径、能力、环境变量和不可信数据边界 | Workspace、Approval |
 | `agent/checkpoint.py` | 独立快照、撤销、恢复和幂等 | Git、Session |
 | `sandbox/` | 本地、容器和远程执行适配 | 统一 Sandbox 端口 |
-| `repo_index/` | AST 切块、词法索引和行号引用 | Retriever 端口 |
+| `repo_index/` | 行窗口 BM25、分词和行号引用 | Retriever 端口 |
 | `providers/` | 真实模型调用、结构化输出和用量 | 当前 ModelProvider 端口 |
 | `server/` | HTTP 认证、Session、审批和健康检查 | Runtime、现有 `http.py` 执行入口 |
 | `tracing/` | Span、错误、Token、延迟和成本 | 无 Runtime 反向依赖 |
 | `eval/` | 固定任务、确定性验证和报告 | CLI、Workspace、Verifier |
 
-这些路径用于说明职责边界。B1 已实现 `agent/loop.py`、`agent/context.py`（最小前缀）、`agent/tools/registry.py`、`agent/tools/builtin.py`（只读工具）和 `agent/security.py`；B2a 已实现 `agent/approval.py`、`agent/sandbox.py`（LocalSandbox）、`agent/checkpoint.py`（ShadowGit）、`agent/tools/write.py`、`agent/tools/exec.py` 与 `agent/tools/git.py`；B3 已实现 `agent/history.py`、完整的 `agent/context.py`、`agent/session.py` 与 `agent/memory.py`；B4 已实现 `agent/trace.py` 与 `agent/cost.py`；B5 已实现 `agent/report.py`；B6 已实现 `providers_openai.py`、Checkpoint 持久化/`undo`、`session`/`trace`/`chat` CLI 与扩展写入工具；B7 已实现 `http.py` 的执行与 SSE 端点；B8 已实现 `repo_index/`（行窗口 BM25 与 `search_code`/`bale search`）和 `eval/`（固定任务、确定性文件断言与 `bale eval`）；其余模块（如 `agent/tools/mcp.py`、Docker sandbox、HTTP 认证/Session）仍为规划，不能当作已有能力。后续实现时应以实际代码和测试为准更新本文。
+这些路径用于说明职责边界。B1 已实现 `agent/loop.py`、`agent/context.py`（最小前缀）、`agent/tools/registry.py`、`agent/tools/builtin.py`（只读工具）和 `agent/security.py`；B2a 已实现 `agent/approval.py`、`agent/sandbox.py`（LocalSandbox）、`agent/checkpoint.py`（ShadowGit）、`agent/tools/write.py`、`agent/tools/exec.py` 与 `agent/tools/git.py`；B3 已实现 `agent/history.py`、完整的 `agent/context.py`、`agent/session.py` 与 `agent/memory.py`；B4 已实现 `agent/trace.py` 与 `agent/cost.py`；B5 已实现 `agent/report.py`；B6 已实现 `providers_openai.py`、Checkpoint 持久化/`undo`、`session`/`trace`/`chat` CLI 与扩展写入工具；B7 已实现 `http.py` 的执行与 SSE 端点；B8 已实现 `repo_index/`（行窗口 BM25 与 `search_code`/`bale search`）和 `eval/`（固定任务、确定性文件断言与 `bale eval`）；B9 已实现 `agent/tools/mcp.py`（stdio 连接、分页 `list_tools`、工具命名空间与 `call_tool` 适配，`bale run --mcp-config`）；其余模块（如 Knowledge Retriever、Docker sandbox、HTTP 认证/Session）仍为规划，不能当作已有能力。后续实现时应以实际代码和测试为准更新本文。
 
 ## 6. 核心逻辑契约
 
@@ -390,7 +392,7 @@ B3 的实际实现：
 
 ## 11. 测试与验证设计
 
-当前 pytest 覆盖契约、配置、FakeProvider、CLI/HTTP 同构、输入校验，以及 B1 的消息契约、路径防护、工具注册器、只读内置工具、ReAct 循环和 CLI run 端到端，B2a 的审批策略、Sandbox 防护、ShadowGit 快照、写入/编辑与执行工具、幂等与「写代码→跑测试→finish」闭环，以及 B3 的 token 估算、预算非负、按 Turn 裁剪与消息配对、稳定前缀、SQLite Session 往返与事务回滚、`after_turn` 记忆、取消落库、Case C 恢复不重复写入和 CLI `--resume`，B4 的 JSONL 事件顺序、追加写入、脱敏与失败不阻断、成本估算和 `--trace`，B5 的 Session 列表顺序、Trace 回读、Markdown 报告内容与 `bale report`，B6 的 Session 汇总、Checkpoint 跨进程基线复用、`bale session`/`bale trace`/`bale chat`/`bale undo`、扩展写入工具、OpenAI 兼容 Provider 的请求映射/解析/重试/脱敏与本地端点免 Key 配置，以及 B8 的标识符分词、BM25 排序、隐藏/二进制文件过滤、`search_code`/`bale search`、任务文件校验、fixture 复制隔离、文件断言和 Markdown/JSON 评测报告；MCP 示例可通过客户端执行初始化、`list_tools` 和 `call_tool`，并检查输出文件内容。基础检查命令为：
+当前 pytest 覆盖契约、配置、FakeProvider、CLI/HTTP 同构、输入校验，以及 B1 的消息契约、路径防护、工具注册器、只读内置工具、ReAct 循环和 CLI run 端到端，B2a 的审批策略、Sandbox 防护、ShadowGit 快照、写入/编辑与执行工具、幂等与「写代码→跑测试→finish」闭环，以及 B3 的 token 估算、预算非负、按 Turn 裁剪与消息配对、稳定前缀、SQLite Session 往返与事务回滚、`after_turn` 记忆、取消落库、Case C 恢复不重复写入和 CLI `--resume`，B4 的 JSONL 事件顺序、追加写入、脱敏与失败不阻断、成本估算和 `--trace`，B5 的 Session 列表顺序、Trace 回读、Markdown 报告内容与 `bale report`，B6 的 Session 汇总、Checkpoint 跨进程基线复用、`bale session`/`bale trace`/`bale chat`/`bale undo`、扩展写入工具、OpenAI 兼容 Provider 的请求映射/解析/重试/脱敏与本地端点免 Key 配置，以及 B8 的标识符分词、BM25 排序、隐藏/二进制文件过滤、`search_code`/`bale search`、任务文件校验、fixture 复制隔离、文件断言和 Markdown/JSON 评测报告，B9 的 MCP 配置校验、工具名与 `inputSchema` 映射、必填参数校验、写/只读治理、`mcp_error`/`mcp_tool_error` 归一化、stdio 往返和 `bale run --mcp-config`；MCP 示例可通过客户端执行初始化、`list_tools` 和 `call_tool`，并检查输出文件内容。基础检查命令为：
 
 ```bash
 ruff check src tests

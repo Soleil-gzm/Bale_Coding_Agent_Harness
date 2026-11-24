@@ -1,6 +1,6 @@
 # Bale Coding Agent Harness 快速启动指南
 
-本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时、B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、审批与 ShadowGit）、B3 上下文与会话运行时（Token 预算、历史裁剪、SQLite Session、取消恢复）、B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）、B5 运行报告（Session/Trace 到 Markdown）、B6 本地闭环增强（持久化 Checkpoint 与 `undo`、`session`/`trace` 检查、`chat` 多轮、扩展写入工具、OpenAI 兼容 Provider）、B7 HTTP 执行/SSE（`/v1/runs`、`/v1/runs/stream`）、B8 检索与评测（`search_code`/`bale search`、`bale eval`）和 FastMCP 文件写入示例。Docker 容器隔离尚未实现；B2a 的本地执行只适用于受控开发场景。默认 Fake 配置不需要模型、数据库服务或容器服务。
+本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时、B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、审批与 ShadowGit）、B3 上下文与会话运行时（Token 预算、历史裁剪、SQLite Session、取消恢复）、B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）、B5 运行报告（Session/Trace 到 Markdown）、B6 本地闭环增强（持久化 Checkpoint 与 `undo`、`session`/`trace` 检查、`chat` 多轮、扩展写入工具、OpenAI 兼容 Provider）、B7 HTTP 执行/SSE（`/v1/runs`、`/v1/runs/stream`）、B8 检索与评测（`search_code`/`bale search`、`bale eval`）、B9 MCP 工具接入（`bale run --mcp-config`）和 FastMCP 文件写入示例。Docker 容器隔离尚未实现；B2a 的本地执行只适用于受控开发场景。默认 Fake 配置不需要模型、数据库服务或容器服务。
 
 ## 1. 环境要求
 
@@ -328,6 +328,39 @@ bale eval \
 - 任一任务 `failed` 或 `error` 时命令返回非零退出码。默认 `BALE_PROVIDER=fake` 只返回固定答案，通常无法满足断言；真实完成率需要配置 Ollama/DeepSeek 等 Provider。
 - 当前只做文件级确定性检查，不执行 fixture 内测试、不比较 Diff，也不包含 Docker 隔离。
 
+### 4.11 MCP 工具接入
+
+`bale run` 可通过 JSON 配置启动 stdio MCP 服务并注册其工具：
+
+```bash
+bale run --workspace "$PWD" --message "写一条 MCP 笔记" \
+  --mcp-config examples/mcp/servers.json --yes
+```
+
+配置格式：
+
+```json
+{
+  "servers": [
+    {
+      "name": "notes",
+      "command": "python",
+      "args": ["write_server.py"],
+      "cwd": ".",
+      "read_only": false,
+      "timeout_ms": 60000
+    }
+  ]
+}
+```
+
+- `command`/`args`/`env` 用于启动子进程，相对 `cwd` 以配置文件所在目录解析。
+- 每个工具对模型暴露为 `mcp_<server>_<tool>`；参数 schema 来自 MCP `inputSchema`，必填参数在本地先校验。
+- 工具默认按写副作用处理，必须审批或加 `--yes`；`read_only=true` 适合只读服务器，并允许并行批次。
+- MCP 协议错误返回 `mcp_error`，工具自身 `isError` 返回 `mcp_tool_error`；两者都会进入 `ToolResult`，不会中断循环。
+- 每次 `bale run` 重新建立会话，运行结束后关闭子进程；`bale chat` 与 HTTP 入口尚未接入 MCP 配置。
+- 手动验证最小服务端仍可使用第 6、7 节。
+
 ## 5. 使用 HTTP 创建与执行 Turn
 
 启动应用工厂（默认读取项目根目录 `.env`）：
@@ -545,7 +578,7 @@ pytest -q
 python -m compileall examples
 ```
 
-测试覆盖契约、配置、FakeProvider、CLI/HTTP 同构、HTTP 输入校验、B1 只读运行时（消息契约、路径防护、工具注册器、只读工具、ReAct 循环、CLI run）、B2a 写入运行时（审批策略、Sandbox 防护、ShadowGit、写入/编辑、执行工具、幂等与端到端改码闭环）、B3 上下文与会话（预算非负、整 Turn 裁剪与配对、稳定前缀、SQLite 往返与事务回滚、记忆、取消恢复与不重复写入）、B4 追踪与成本（事件顺序、追加写入、脱敏、失败不阻断、成本估算）、B5 运行报告（Session 顺序、Trace 回读、报告内容、`--output`）、B6 本地闭环（Session 汇总、Checkpoint 跨进程基线、`session`/`trace`/`chat`/`undo`、扩展写入工具、OpenAI 兼容 Provider 映射/重试/脱敏、本地端点免 Key）和 B7 HTTP 执行/SSE（默认拒绝写入、显式审批后写入、SSE 事件顺序与 `result` 结束）、B8 检索与评测（分词、BM25 排序、隐藏/二进制过滤、`search_code`/`bale search`、任务校验、fixture 隔离、文件断言与 Markdown/JSON 报告）以及 MCP 示例语法，不需要网络或 API Key。部分测试会在临时目录启动真实 pytest 子进程。仓库已配置 GitHub Actions，但远程结果应以 Actions 页面为准。
+测试覆盖契约、配置、FakeProvider、CLI/HTTP 同构、HTTP 输入校验、B1 只读运行时（消息契约、路径防护、工具注册器、只读工具、ReAct 循环、CLI run）、B2a 写入运行时（审批策略、Sandbox 防护、ShadowGit、写入/编辑、执行工具、幂等与端到端改码闭环）、B3 上下文与会话（预算非负、整 Turn 裁剪与配对、稳定前缀、SQLite 往返与事务回滚、记忆、取消恢复与不重复写入）、B4 追踪与成本（事件顺序、追加写入、脱敏、失败不阻断、成本估算）、B5 运行报告（Session 顺序、Trace 回读、报告内容、`--output`）、B6 本地闭环（Session 汇总、Checkpoint 跨进程基线、`session`/`trace`/`chat`/`undo`、扩展写入工具、OpenAI 兼容 Provider 映射/重试/脱敏、本地端点免 Key）和 B7 HTTP 执行/SSE（默认拒绝写入、显式审批后写入、SSE 事件顺序与 `result` 结束）、B8 检索与评测（分词、BM25 排序、隐藏/二进制过滤、`search_code`/`bale search`、任务校验、fixture 隔离、文件断言与 Markdown/JSON 报告）、B9 MCP 工具接入（配置校验、工具名与 schema 映射、必填参数校验、写/只读治理、错误归一化、stdio 往返、`bale run --mcp-config`）以及 MCP 示例语法，不需要网络或 API Key。部分测试会在临时目录启动真实 pytest 子进程。仓库已配置 GitHub Actions，但远程结果应以 Actions 页面为准。
 
 修改 MCP 示例后，重新执行第 7 节脚本，确认：
 

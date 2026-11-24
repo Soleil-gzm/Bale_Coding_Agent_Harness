@@ -2,7 +2,7 @@
 
 Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目标是将模型交互、工具治理、上下文管理、隔离执行、状态恢复和执行证据组织为可扩展的薄内核。
 
-**当前仓库处于早期建设阶段。** 已落地 B0 工程基础、B1 只读 ReAct 运行时、B2a 写入运行时、B3 上下文/会话运行时、B4 追踪/成本运行时、B5 运行报告、B6 本地闭环增强、B7 HTTP 执行/SSE 和 B8 检索/评测：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider 与 OpenAI 兼容 Provider、只创建 Turn 的 CLI/HTTP 入口，带审批、ShadowGit 快照和本地 Sandbox 的 `bale run`，Token 预算、历史裁剪、SQLite Session 与取消恢复，JSONL Trace 与可选成本估算，基于 Session/Trace 的 Markdown 报告，持久化 Checkpoint 与 `bale undo`，`bale chat` 多轮交互，`bale session`/`bale trace` 检查命令，`move_file`/`delete_file`/`apply_patch` 写入工具，执行 Turn 的 `POST /v1/runs` 与 SSE 流式 `POST /v1/runs/stream`，以及 BM25 代码检索（`search_code`、`bale search`）与固定任务评测（`bale eval`）。Docker 容器隔离、向量检索、HTTP 认证与 HTTP 审批流仍未实现。
+**当前仓库处于早期建设阶段。** 已落地 B0 工程基础、B1 只读 ReAct 运行时、B2a 写入运行时、B3 上下文/会话运行时、B4 追踪/成本运行时、B5 运行报告、B6 本地闭环增强、B7 HTTP 执行/SSE、B8 检索/评测和 B9 MCP 工具接入：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider 与 OpenAI 兼容 Provider、只创建 Turn 的 CLI/HTTP 入口，带审批、ShadowGit 快照和本地 Sandbox 的 `bale run`，Token 预算、历史裁剪、SQLite Session 与取消恢复，JSONL Trace 与可选成本估算，基于 Session/Trace 的 Markdown 报告，持久化 Checkpoint 与 `bale undo`，`bale chat` 多轮交互，`bale session`/`bale trace` 检查命令，`move_file`/`delete_file`/`apply_patch` 写入工具，执行 Turn 的 `POST /v1/runs` 与 SSE 流式 `POST /v1/runs/stream`，以及 BM25 代码检索（`search_code`、`bale search`）、固定任务评测（`bale eval`）和 stdio MCP 工具适配（`bale run --mcp-config`）。Docker 容器隔离、向量检索、HTTP 认证与 HTTP 审批流仍未实现。
 
 ## 当前功能
 
@@ -70,6 +70,13 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - `bale trace` 汇总 JSONL Trace 的事件计数、模型耗时与工具耗时，`--limit N` 可追加最近 N 条事件原文。
 - `bale chat` 在同一个 Session 上循环执行 Turn，输入 `/exit` 或 `/quit` 退出；跨 Turn 连续性依赖 Session 记忆，不携带完整对话历史。
 
+### MCP 工具接入
+
+- `bale run --mcp-config examples/mcp/servers.json` 读取 JSON 配置，启动 stdio MCP 服务、初始化会话并分页拉取工具。
+- 每个 MCP 工具被适配为 `mcp_<server>_<tool>`，与内置工具共享参数校验、审批、超时和错误归一化。
+- MCP 工具默认按写副作用处理，需要审批或 `--yes`；服务器声明 `read_only=true` 后才作为只读工具参与并行执行。
+- 配置项包括 `name`、`command`、`args`、`env`、`cwd`、`read_only` 和 `timeout_ms`；相对 `cwd` 以配置文件所在目录为基准。
+
 ### MCP 文件写入示例
 
 - 使用 `FastMCP` 创建名为 `WriteServer` 的 MCP 服务，通过标准输入输出通信。
@@ -89,6 +96,7 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - Trace 为本地追加 JSONL，无轮转、采样或远程导出；`estimated_cost` 只是按配置费率的估算，不代表 Provider 账单。
 - 运行报告是只读 Markdown 投影，只提供 CLI 入口，不包含 HTML/PDF 导出或 HTTP 报告接口。
 - 检索仅支持无第三方依赖的行窗口 BM25 词法排序，不包含 AST 结构化切块、向量/混合检索、增量更新或持久化索引；评测只执行 JSON 固定任务与文件级断言，不包含 Docker 隔离、自动生成任务或模型评分。
+- MCP 只支持 stdio transport，且每次 `bale run` 都会重新建立会话；不包含 SSE/HTTP transport、工具缓存、工具级审批界面或跨进程会话复用。`read_only` 是调用方声明，不代表服务器已被隔离。
 - HTTP 接口没有认证、限流、Session 或交互式审批；默认拒绝写入，`approve_writes=true` 只应由可信调用方使用。
 - `bale chat` 的跨 Turn 连续性依赖 Session 记忆摘要，不携带完整历史，也不会自动压缩超长对话。
 - 审批只在 CLI 中提供交互确认与 `--yes`，没有 HTTP 审批流。
@@ -112,8 +120,8 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 | 观测 | JsonlTraceExporter、CostRates | 追加式 JSONL 事件与可选成本估算 |
 | 报告 | build_report、bale report | 从 Session/Trace 生成只读 Markdown |
 | 检索与评测 | Bm25Index、EvalTask/EvalReport | 标准库 BM25、临时工作区与确定性文件断言 |
-| 工具协议 | Model Context Protocol | MCP 示例使用 `stdio` transport |
-| SDK | `mcp==1.30.0` | 使用 `mcp.server.fastmcp.FastMCP` |
+| 工具协议 | Model Context Protocol | MCP 客户端与服务端均使用 `stdio` transport |
+| SDK | `mcp==1.30.0` | 服务端使用 `FastMCP`，运行时使用 `ClientSession` 适配工具 |
 | 测试与检查 | pytest、Ruff、pip-tools | 离线测试、静态检查与哈希锁文件 |
 | 存储 | SQLite、本地文件系统 | Session 使用标准库 `sqlite3`；MCP 示例写入 `output/` |
 
@@ -146,12 +154,13 @@ Bale_Coding_Agent_Harness/
 │       ├── sandbox.py        # Sandbox 端口与 LocalSandbox
 │       ├── checkpoint.py     # ShadowGit 快照与持久化恢复
 │       ├── loop.py           # AgentLoop 与 RunResult
-│       └── tools/            # registry、内置/写入/执行/git 工具
+│       └── tools/            # registry、内置/写入/执行/git/MCP 工具
 ├── tests/                    # 契约、配置、入口与运行时测试
 ├── examples/eval/
 │   ├── tasks.json            # 示例评测任务
 │   └── fixtures/             # 任务工作区模板
 ├── examples/mcp/
+│   ├── servers.json          # stdio MCP 服务配置样例
 │   └── write_server.py       # 独立 FastMCP 服务端示例
 ├── docs/
 │   ├── architecture.md       # 当前实现与目标运行时架构
@@ -295,7 +304,14 @@ uvicorn bale_harness.http:create_app --factory
 python examples/mcp/write_server.py
 ```
 
-MCP 命令通过 `stdio` 等待客户端请求，不是交互式命令行程序。HTTP 请求示例、完整客户端验证脚本、配置说明和常见问题见[快速启动指南](docs/quickstart.md)。
+MCP 命令通过 `stdio` 等待客户端请求，不是交互式命令行程序。运行时客户端可直接复用示例配置：
+
+```bash
+bale run --workspace "$PWD" --message "写一条 MCP 笔记" \
+  --mcp-config examples/mcp/servers.json --yes
+```
+
+HTTP 请求示例、完整客户端验证脚本、配置说明和常见问题见[快速启动指南](docs/quickstart.md)。
 
 ## 工具概览
 
