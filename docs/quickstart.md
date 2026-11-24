@@ -1,6 +1,6 @@
 # Bale Coding Agent Harness 快速启动指南
 
-本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时、B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、审批与 ShadowGit）、B3 上下文与会话运行时（Token 预算、历史裁剪、SQLite Session、取消恢复）、B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）和 FastMCP 文件写入示例。真实 OpenAIProvider 与 Docker 容器隔离尚未实现；B2a 的本地执行只适用于受控开发场景。默认 Fake 配置不需要模型、数据库服务或容器服务。
+本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时、B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、审批与 ShadowGit）、B3 上下文与会话运行时（Token 预算、历史裁剪、SQLite Session、取消恢复）、B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）、B5 运行报告（Session/Trace 到 Markdown）和 FastMCP 文件写入示例。真实 OpenAIProvider 与 Docker 容器隔离尚未实现；B2a 的本地执行只适用于受控开发场景。默认 Fake 配置不需要模型、数据库服务或容器服务。
 
 ## 1. 环境要求
 
@@ -190,6 +190,28 @@ bale run \
 - 同时配置 `BALE_INPUT_COST_PER_1K` 与 `BALE_OUTPUT_COST_PER_1K` 后，`turn_finished.data.estimated_cost` 与 `RunResult.estimated_cost` 才有数值；它是估算，不是 Provider 账单。
 - 追踪写入失败（目录不可写、目标为目录等）只会跳过 trace，不影响 Turn 结果。
 
+### 4.5 生成运行报告
+
+`bale report` 读取 Session 数据库，可选叠加 Trace，输出 Markdown：
+
+```bash
+bale report \
+  --session-db "$PWD/.bale/sessions.db" \
+  --session-id 6f1c1f6e-2e0e-4d0e-9d1e-2f7f1a9b8c11 \
+  --trace "$PWD/.bale/trace.jsonl" \
+  --output "$PWD/.bale/report.md"
+```
+
+报告包含：
+
+- 会话概要：Session、Workspace、生成时间、Turn 数与状态计数、累计 token、可选估算成本。
+- 每个 Turn：状态、迭代次数、工具调用数、用量、错误、Task 与 Answer；超长文本会截断。
+- 工具调用表：工具名、状态、错误码与延迟。
+- Trace 概要：事件计数、模型耗时与工具耗时；未提供 Trace 时显示占位说明。
+- 记忆：写入的 `after_turn` 摘要。
+
+省略 `--output` 时输出到标准输出。Session 不存在、没有 Turn 或 Trace 路径无效时命令以非零状态退出；报告不调用模型，也不修改数据库。
+
 ## 5. 使用 HTTP 创建 Turn
 
 启动应用工厂：
@@ -376,7 +398,7 @@ pytest -q
 python -m compileall examples
 ```
 
-测试覆盖契约、配置、FakeProvider、CLI/HTTP 同构、HTTP 输入校验、B1 只读运行时（消息契约、路径防护、工具注册器、只读工具、ReAct 循环、CLI run）、B2a 写入运行时（审批策略、Sandbox 防护、ShadowGit、写入/编辑、执行工具、幂等与端到端改码闭环）、B3 上下文与会话（预算非负、整 Turn 裁剪与配对、稳定前缀、SQLite 往返与事务回滚、记忆、取消恢复与不重复写入）、B4 追踪与成本（事件顺序、追加写入、脱敏、失败不阻断、成本估算）和 MCP 示例语法，不需要网络或 API Key。部分测试会在临时目录启动真实 pytest 子进程。仓库已配置 GitHub Actions，但远程结果应以 Actions 页面为准。
+测试覆盖契约、配置、FakeProvider、CLI/HTTP 同构、HTTP 输入校验、B1 只读运行时（消息契约、路径防护、工具注册器、只读工具、ReAct 循环、CLI run）、B2a 写入运行时（审批策略、Sandbox 防护、ShadowGit、写入/编辑、执行工具、幂等与端到端改码闭环）、B3 上下文与会话（预算非负、整 Turn 裁剪与配对、稳定前缀、SQLite 往返与事务回滚、记忆、取消恢复与不重复写入）、B4 追踪与成本（事件顺序、追加写入、脱敏、失败不阻断、成本估算）、B5 运行报告（Session 顺序、Trace 回读、报告内容、`--output`）和 MCP 示例语法，不需要网络或 API Key。部分测试会在临时目录启动真实 pytest 子进程。仓库已配置 GitHub Actions，但远程结果应以 Actions 页面为准。
 
 修改 MCP 示例后，重新执行第 7 节脚本，确认：
 

@@ -2,7 +2,7 @@
 
 Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目标是将模型交互、工具治理、上下文管理、隔离执行、状态恢复和执行证据组织为可扩展的薄内核。
 
-**当前仓库处于早期建设阶段。** 已落地 B0 工程基础、B1 只读 ReAct 运行时、B2a 写入运行时、B3 上下文/会话运行时和 B4 追踪/成本运行时：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider、只创建 Turn 的 CLI/HTTP 入口，带审批、ShadowGit 快照和本地 Sandbox 的 `bale run`，Token 预算、历史裁剪、SQLite Session 与取消恢复，以及 JSONL Trace 与可选成本估算。真实 OpenAIProvider、Docker 容器隔离与远程 Trace 导出仍未实现。
+**当前仓库处于早期建设阶段。** 已落地 B0 工程基础、B1 只读 ReAct 运行时、B2a 写入运行时、B3 上下文/会话运行时、B4 追踪/成本运行时和 B5 运行报告：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider、只创建 Turn 的 CLI/HTTP 入口，带审批、ShadowGit 快照和本地 Sandbox 的 `bale run`，Token 预算、历史裁剪、SQLite Session 与取消恢复，JSONL Trace 与可选成本估算，以及基于 Session/Trace 的 Markdown 报告。真实 OpenAIProvider、Docker 容器隔离与远程 Trace 导出仍未实现。
 
 ## 当前功能
 
@@ -39,6 +39,11 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - Trace 写入失败不会改变 Turn 结果；`bale run --trace path.jsonl` 启用，`BALE_TRACE_PATH` 可提供默认路径。
 - 同时配置 `BALE_INPUT_COST_PER_1K` 与 `BALE_OUTPUT_COST_PER_1K` 后，`RunResult.estimated_cost` 给出估算成本；未配置时为 `null`。
 
+### 运行报告
+
+- `bale report` 读取 SQLite Session 与可选 JSONL Trace，生成只读 Markdown 报告：会话概要、每个 Turn 的状态/用量/任务与答案、工具调用表、Trace 事件计数和记忆摘要。
+- 报告不调用模型、不修改 Session；默认输出到标准输出，`--output` 可直接写入文件。
+
 ### MCP 文件写入示例
 
 - 使用 `FastMCP` 创建名为 `WriteServer` 的 MCP 服务，通过标准输入输出通信。
@@ -56,6 +61,7 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - Session 持久化基于本地 SQLite 文件，不提供多进程协调、远程存储或 HTTP Session 接口。
 - ShadowGit 的 git-dir 仍是进程临时目录，恢复后的 Diff 只覆盖恢复之后的改动。
 - Trace 为本地追加 JSONL，无轮转、采样或远程导出；`estimated_cost` 只是按配置费率的估算，不代表 Provider 账单。
+- 运行报告是只读 Markdown 投影，只提供 CLI 入口，不包含 HTML/PDF 导出或 HTTP 报告接口。
 - 不包含 Checkpoint 目录持久化、Trace、评测、SSE 或 HTTP 执行接口。
 - 审批只在 CLI 中提供交互确认与 `--yes`，没有 HTTP 审批流。
 - MCP 示例的文件名精度为秒，同一秒内的重复调用可能覆盖同名文件。
@@ -75,6 +81,7 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 | 本地执行 | LocalSandbox、ShadowGit | 子进程防护层与独立 git-dir 快照 |
 | 上下文与会话 | ContextBuilder、HistoryTrimmer、SessionStore | Token 预算、整 Turn 裁剪与 SQLite 持久化 |
 | 观测 | JsonlTraceExporter、CostRates | 追加式 JSONL 事件与可选成本估算 |
+| 报告 | build_report、bale report | 从 Session/Trace 生成只读 Markdown |
 | 工具协议 | Model Context Protocol | MCP 示例使用 `stdio` transport |
 | SDK | `mcp==1.30.0` | 使用 `mcp.server.fastmcp.FastMCP` |
 | 测试与检查 | pytest、Ruff、pip-tools | 离线测试、静态检查与哈希锁文件 |
@@ -100,6 +107,7 @@ Bale_Coding_Agent_Harness/
 │       ├── memory.py         # after_turn 记忆摘要
 │       ├── trace.py          # JSONL Trace 事件与导出器
 │       ├── cost.py           # 成本费率与估算
+│       ├── report.py         # Session/Trace 到 Markdown 报告
 │       ├── approval.py       # 审批策略
 │       ├── sandbox.py        # Sandbox 端口与 LocalSandbox
 │       ├── checkpoint.py     # ShadowGit 快照
@@ -174,6 +182,16 @@ bale run \
   --workspace "$PWD" \
   --trace "$PWD/.bale/trace.jsonl" \
   --yes
+```
+
+把该 Session 与追踪汇总成 Markdown 报告：
+
+```bash
+bale report \
+  --session-db "$PWD/.bale/sessions.db" \
+  --session-id 6f1c1f6e-2e0e-4d0e-9d1e-2f7f1a9b8c11 \
+  --trace "$PWD/.bale/trace.jsonl" \
+  --output "$PWD/.bale/report.md"
 ```
 
 启动只提供 Turn 创建接口的 HTTP 应用：

@@ -4,7 +4,7 @@
 
 本文同时记录两类内容：
 
-- **当前实现**：B0 工程骨架、Turn/ToolResult 契约、Settings、ModelProvider/FakeProvider、共享 Turn 构造入口；B1 只读 ReAct 运行时（AgentLoop、ToolRegistry、只读内置工具、Workspace 路径防护与 `bale run` 入口）；B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、LocalSandbox、审批策略、ShadowGit 快照与调用幂等）；B3 上下文与会话运行时（Token 预算、历史裁剪、稳定系统前缀、SQLite Session、`after_turn` 记忆、取消与恢复）；B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）；以及可独立运行的 FastMCP 文件写入示例。
+- **当前实现**：B0 工程骨架、Turn/ToolResult 契约、Settings、ModelProvider/FakeProvider、共享 Turn 构造入口；B1 只读 ReAct 运行时（AgentLoop、ToolRegistry、只读内置工具、Workspace 路径防护与 `bale run` 入口）；B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、LocalSandbox、审批策略、ShadowGit 快照与调用幂等）；B3 上下文与会话运行时（Token 预算、历史裁剪、稳定系统前缀、SQLite Session、`after_turn` 记忆、取消与恢复）；B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）；B5 运行报告（Session/Trace 到 Markdown）；以及可独立运行的 FastMCP 文件写入示例。
 - **目标架构**：Coding Agent Harness 的后续设计方向，用于约束模块边界和扩展方式。
 
 除特别注明外，带有“规划”“目标”或“后续”标识的模块均未在当前仓库实现。文档中的目标接口是逻辑契约，不代表已有 Python 类或稳定 API。
@@ -61,7 +61,7 @@ CLI 和 HTTP 对相同输入生成相同的非 ID 字段；`turn_id` 和 `sessio
 
 ### 3.2 B1 只读、B2a 写入、B3 上下文/会话与 B4 追踪/成本运行时
 
-B1 实现了最小 ReAct 闭环：模型请求工具调用 → 注册表治理执行 → 结果回注上下文 → 无工具调用时结束。B2a 在同一注册表上加入写入与执行工具：调用先经审批，`shell`/`run_tests` 交由 `LocalSandbox` 执行，每次迭代结束由 `ShadowGit` 在独立 git-dir 中快照，最终把 Diff 写入结果。B3 在循环外补充上下文与状态：每次模型调用前由 `ContextBuilder` 用稳定系统前缀、Session 记忆和裁剪后的历史重建提示；可选 `SessionStore` 以 SQLite 追加保存消息、Turn 状态、已执行调用和 `after_turn` 记忆，取消或中断后可按 Turn 恢复且不重复副作用。B4 在循环内埋点：`JsonlTraceExporter` 追加记录 `turn_started`、`model_call`、`tool_call`、`checkpoint` 与 `turn_finished`，`CostRates` 在配置费率后给出估算成本；追踪是 best-effort，写入失败不会改变 Turn 结果。
+B1 实现了最小 ReAct 闭环：模型请求工具调用 → 注册表治理执行 → 结果回注上下文 → 无工具调用时结束。B2a 在同一注册表上加入写入与执行工具：调用先经审批，`shell`/`run_tests` 交由 `LocalSandbox` 执行，每次迭代结束由 `ShadowGit` 在独立 git-dir 中快照，最终把 Diff 写入结果。B3 在循环外补充上下文与状态：每次模型调用前由 `ContextBuilder` 用稳定系统前缀、Session 记忆和裁剪后的历史重建提示；可选 `SessionStore` 以 SQLite 追加保存消息、Turn 状态、已执行调用和 `after_turn` 记忆，取消或中断后可按 Turn 恢复且不重复副作用。B4 在循环内埋点：`JsonlTraceExporter` 追加记录 `turn_started`、`model_call`、`tool_call`、`checkpoint` 与 `turn_finished`，`CostRates` 在配置费率后给出估算成本；追踪是 best-effort，写入失败不会改变 Turn 结果。B5 在循环外做只读投影：`build_report` 汇总 Session 中的 Turn、已执行调用、记忆与 Trace，生成 Markdown 报告，不调用模型、不写入 Session。
 
 ```mermaid
 flowchart LR
@@ -101,8 +101,9 @@ flowchart LR
 | `agent/memory.py` | `after_turn` fast curator：`Task/Outcome` 有界摘要 | 仅 completed 且 best-effort |
 | `agent/trace.py` | `TraceEvent`、`TraceExporter` 协议、`JsonlTraceExporter` 与 `NullTraceExporter`：追加写、序号递增、脱敏、失败不阻断 | 本地 JSONL，无轮转、采样或远程导出 |
 | `agent/cost.py` | `CostRates` 与 `estimate_cost`：按每千 token 费率估算成本 | 不内置默认价格，结果不是 Provider 账单 |
+| `agent/report.py` | `build_report`：Session、已执行调用、记忆与 Trace 汇总为 Markdown | 只读投影，不调用模型、不改 Session |
 | `agent/loop.py` | ReAct 循环、终止/取消/迭代与 token 预算、上下文重建、Session 持久化、恢复、Trace 埋点、耗时与成本与 Diff 聚合 | 无远程 Trace 导出 |
-| `cli.py` `run` | 构造 Turn 并执行循环，支持 `--session-db`/`--session-id`/`--resume`/`--trace`，输出 `RunResult` JSON | 退出码：`completed` 为 0，否则为 1 |
+| `cli.py` `run` / `report` | `run` 构造并执行 Turn，支持 `--session-db`/`--session-id`/`--resume`/`--trace`；`report` 输出或写入 Markdown 报告 | 退出码：`completed` 为 0，否则为 1 |
 
 `ModelProvider.complete` 已演进为接收消息列表与工具定义、返回结构化 `ModelResponse`；`FakeProvider` 支持脚本化响应队列，使循环测试完全离线且确定。真实 OpenAI Provider 仍未实现。
 
@@ -165,7 +166,7 @@ sequenceDiagram
 
 ## 4. 目标系统分层架构
 
-当前已实现 CLI/HTTP 到 Turn 的构造路径，以及图中的 AgentLoop、ContextBuilder、HistoryTrimmer、ToolRegistry、Approval、Session 与 Checkpoint 的本地版本，并已有本地 JSONL Trace 与成本估算。MCP Tool Adapter、RepoIndex/Knowledge Retriever 与 Docker Sandbox 仍为后续设计，不是当前目录结构或已有能力。
+当前已实现 CLI/HTTP 到 Turn 的构造路径，以及图中的 AgentLoop、ContextBuilder、HistoryTrimmer、ToolRegistry、Approval、Session 与 Checkpoint 的本地版本，并已有本地 JSONL Trace、成本估算与只读 Markdown 报告。MCP Tool Adapter、RepoIndex/Knowledge Retriever 与 Docker Sandbox 仍为后续设计，不是当前目录结构或已有能力。
 
 ```mermaid
 flowchart TB
@@ -231,7 +232,7 @@ flowchart TB
 | `tracing/` | Span、错误、Token、延迟和成本 | 无 Runtime 反向依赖 |
 | `eval/` | 固定任务、确定性验证和报告 | CLI、Workspace、Verifier |
 
-这些路径用于说明职责边界。B1 已实现 `agent/loop.py`、`agent/context.py`（最小前缀）、`agent/tools/registry.py`、`agent/tools/builtin.py`（只读工具）和 `agent/security.py`；B2a 已实现 `agent/approval.py`、`agent/sandbox.py`（LocalSandbox）、`agent/checkpoint.py`（ShadowGit）、`agent/tools/write.py`、`agent/tools/exec.py` 与 `agent/tools/git.py`；B3 已实现 `agent/history.py`、完整的 `agent/context.py`、`agent/session.py` 与 `agent/memory.py`；B4 已实现 `agent/trace.py` 与 `agent/cost.py`；其余模块仍为规划，不能当作已有能力。后续实现时应以实际代码和测试为准更新本文。
+这些路径用于说明职责边界。B1 已实现 `agent/loop.py`、`agent/context.py`（最小前缀）、`agent/tools/registry.py`、`agent/tools/builtin.py`（只读工具）和 `agent/security.py`；B2a 已实现 `agent/approval.py`、`agent/sandbox.py`（LocalSandbox）、`agent/checkpoint.py`（ShadowGit）、`agent/tools/write.py`、`agent/tools/exec.py` 与 `agent/tools/git.py`；B3 已实现 `agent/history.py`、完整的 `agent/context.py`、`agent/session.py` 与 `agent/memory.py`；B4 已实现 `agent/trace.py` 与 `agent/cost.py`；B5 已实现 `agent/report.py`；其余模块仍为规划，不能当作已有能力。后续实现时应以实际代码和测试为准更新本文。
 
 ## 6. 核心逻辑契约
 
@@ -385,7 +386,7 @@ B3 的实际实现：
 
 ## 11. 测试与验证设计
 
-当前 pytest 覆盖契约、配置、FakeProvider、CLI/HTTP 同构、输入校验，以及 B1 的消息契约、路径防护、工具注册器、只读内置工具、ReAct 循环和 CLI run 端到端，B2a 的审批策略、Sandbox 防护、ShadowGit 快照、写入/编辑与执行工具、幂等与「写代码→跑测试→finish」闭环，以及 B3 的 token 估算、预算非负、按 Turn 裁剪与消息配对、稳定前缀、SQLite Session 往返与事务回滚、`after_turn` 记忆、取消落库、Case C 恢复不重复写入和 CLI `--resume`，B4 的 JSONL 事件顺序、追加写入、脱敏与失败不阻断、成本估算和 `--trace`；MCP 示例可通过客户端执行初始化、`list_tools` 和 `call_tool`，并检查输出文件内容。基础检查命令为：
+当前 pytest 覆盖契约、配置、FakeProvider、CLI/HTTP 同构、输入校验，以及 B1 的消息契约、路径防护、工具注册器、只读内置工具、ReAct 循环和 CLI run 端到端，B2a 的审批策略、Sandbox 防护、ShadowGit 快照、写入/编辑与执行工具、幂等与「写代码→跑测试→finish」闭环，以及 B3 的 token 估算、预算非负、按 Turn 裁剪与消息配对、稳定前缀、SQLite Session 往返与事务回滚、`after_turn` 记忆、取消落库、Case C 恢复不重复写入和 CLI `--resume`，B4 的 JSONL 事件顺序、追加写入、脱敏与失败不阻断、成本估算和 `--trace`，B5 的 Session 列表顺序、Trace 回读、Markdown 报告内容与 `bale report`；MCP 示例可通过客户端执行初始化、`list_tools` 和 `call_tool`，并检查输出文件内容。基础检查命令为：
 
 ```bash
 ruff check src tests
