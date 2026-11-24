@@ -11,6 +11,7 @@ turn, so exporters swallow their own I/O failures.
 """
 
 import asyncio
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -137,6 +138,68 @@ class JsonlTraceExporter:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(line)
+
+
+class QueueTraceExporter:
+    """In-memory exporter that publishes events to an asyncio queue.
+
+    A consumer reads :meth:`stream` while the turn runs; :meth:`close` ends the
+    stream after the final event has been delivered.
+    """
+
+    def __init__(self) -> None:
+        self._queue: asyncio.Queue[TraceEvent | None] = asyncio.Queue()
+        self._seq = 0
+        self._turn_id: UUID | None = None
+        self._session_id: UUID | None = None
+
+    async def bind(self, turn: Turn) -> None:
+        self._turn_id = turn.turn_id
+        self._session_id = turn.session_id
+
+    async def emit(
+        self,
+        event: str,
+        *,
+        iteration: int | None = None,
+        name: str | None = None,
+        status: str | None = None,
+        duration_ms: int | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        if self._turn_id is None:
+            return
+        self._seq += 1
+        await self._queue.put(
+            TraceEvent(
+                seq=self._seq,
+                ts=_utc_now(),
+                event=event,
+                turn_id=self._turn_id,
+                session_id=self._session_id,
+                iteration=iteration,
+                name=name,
+                status=status,
+                duration_ms=duration_ms,
+                data=dict(data or {}),
+            )
+        )
+
+    async def close(self) -> None:
+        """Signal that no more events will be produced."""
+        await self._queue.put(None)
+
+    def close_nowait(self) -> None:
+        """Non-blocking variant of :meth:`close` for task callbacks."""
+        self._queue.put_nowait(None)
+
+    async def stream(self) -> AsyncIterator[TraceEvent]:
+        """Yield events until :meth:`close` is called."""
+        while True:
+            event = await self._queue.get()
+            if event is None:
+                return
+            yield event
 
 
 def read_trace(path: str | Path) -> list[TraceEvent]:
