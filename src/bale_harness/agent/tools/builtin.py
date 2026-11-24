@@ -7,6 +7,7 @@ from typing import Any
 
 from bale_harness.agent.messages import ToolSpec
 from bale_harness.agent.security import WorkspaceError, WorkspaceGuard
+from bale_harness.agent.tools.code_search import SearchCodeTool
 from bale_harness.agent.tools.common import (
     MAX_OUTPUT_CHARS,
     error,
@@ -218,4 +219,9 @@ class SearchFilesTool(BaseTool):
 
 def build_default_tools(guard: WorkspaceGuard) -> list[BaseTool]:
     """Return the built-in read-only tools wired to the given workspace guard."""
-    return [ReadFileTool(guard), ListFilesTool(guard), SearchFilesTool(guard)]
+    return [
+        ReadFileTool(guard),
+        ListFilesTool(guard),
+        SearchFilesTool(guard),
+        SearchCodeTool(guard),
+    ]
