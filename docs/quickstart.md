@@ -1,17 +1,17 @@
 # Bale Coding Agent Harness 快速启动指南
 
-本指南帮助你在本地安装并验证当前仓库中的 FastMCP 文件写入示例。完整 Agent Runtime 尚未包含在仓库中，因此不需要配置模型、数据库或容器服务。
+本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口和 FastMCP 文件写入示例。Turn 当前只创建、不执行；真实 OpenAIProvider 和完整 Agent Runtime 尚未实现。默认 Fake 配置不需要模型、数据库或容器服务。
 
 ## 1. 环境要求
 
 | 依赖 | 要求 | 用途 |
 |---|---|---|
-| Python | 3.10 或更高版本 | 运行 MCP 服务端和客户端 |
+| Python | 3.11 或更高版本，本地已验证 3.11.18 | 运行包、CLI/HTTP 和 MCP 示例 |
 | pip | 建议使用当前稳定版本 | 安装锁定依赖 |
 | MCP 客户端 | 支持 `stdio` 的客户端，或使用本文 Python 脚本 | 初始化和调用工具 |
 | 文件系统权限 | 对启动目录具有写权限 | 创建 `output/` 和文本文件 |
 
-当前示例不需要 GPU、Docker、数据库或 API Key。
+默认 Fake 配置和 MCP 示例不需要 GPU、Docker、数据库或 API Key。选择 `openai` 时必须配置 Key，但真实 Provider 目前仍会明确报告未实现。
 
 ## 2. 安装
 
@@ -43,13 +43,68 @@ conda activate bale-harness
 
 ```bash
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install --require-hashes -r requirements.lock
+python -m pip install --no-deps .
 python -m pip check
 ```
 
-`requirements.txt` 将 MCP SDK 固定为 `mcp==1.30.0`。不要直接升级到不兼容的主版本后再沿用当前 FastMCP 示例。
+`requirements.lock` 是由 pyproject 生成、包含运行与开发依赖及哈希的完整锁文件。`requirements.txt` 仅为原 MCP 示例保留 `mcp==1.30.0`，完整安装应使用上述锁文件。不要直接升级到不兼容的 MCP 主版本后再沿用当前 FastMCP 示例。
 
-## 3. 启动服务端
+## 3. 配置 Settings
+
+默认配置为 `BALE_PROVIDER=fake`，无需创建 `.env` 即可使用 CLI 和 HTTP 的 Turn 创建入口。需要显式管理环境时，可以复制无密钥样例：
+
+```bash
+cp .env.example .env
+```
+
+配置项如下：
+
+| 环境变量 | 当前行为 |
+|---|---|
+| `BALE_PROVIDER` | `fake` 或 `openai`，默认 `fake` |
+| `BALE_OPENAI_API_KEY` | `openai` 模式必填，空白值视为缺失，使用 SecretStr 保护 |
+
+`openai` 模式缺少有效 Key 时会在初始化阶段失败。即使 Key 有效，Provider 工厂也会报告真实 OpenAIProvider 尚未实现，不会静默退回 Fake。`.env` 已被 Git 忽略，不要提交真实密钥或打印完整 Settings。
+
+## 4. 使用 CLI 创建 Turn
+
+```bash
+bale turn \
+  --message "Inspect the repository" \
+  --workspace "$PWD" \
+  --token-budget 4096
+```
+
+命令向标准输出写入一个 Turn JSON。默认生成随机 `turn_id` 和 `session_id`，状态为 `created`，`max_iterations` 为 20，`approval_mode` 为 `approve_write`。可通过 `--repo-revision`、`--max-iterations`、`--cost-budget` 和 `--approval-mode` 覆盖相应输入。
+
+该命令只构造和校验 Turn，不创建 workspace，不调用 `FakeProvider.complete()`，也不执行任何工具。
+
+## 5. 使用 HTTP 创建 Turn
+
+启动应用工厂：
+
+```bash
+uvicorn bale_harness.http:create_app --factory --host 127.0.0.1 --port 8000
+```
+
+在另一个终端发送请求，将 workspace 替换为实际路径：
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/turns \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Inspect the repository",
+    "workspace": "/absolute/path/workspace",
+    "token_budget": 4096
+  }'
+```
+
+成功时返回 HTTP 201 和与 CLI 相同的 Turn 结构。相同输入下，除分别生成的随机 ID 外字段一致。非法预算、空白消息和未知字段返回 HTTP 422。
+
+当前业务接口只有 `POST /v1/turns`，没有 Turn 执行、Session、SSE、健康检查或持久化接口。
+
+## 6. 启动 MCP 服务端
 
 ```bash
 python examples/mcp/write_server.py
@@ -59,9 +114,9 @@ python examples/mcp/write_server.py
 
 直接启动适合检查导入和进程是否可用。实际调用工具时，建议让 MCP 客户端启动并管理服务进程，而不是在一个终端中手动输入协议消息。
 
-## 4. 使用 Python 客户端验证
+## 7. 使用 Python 客户端验证
 
-如果第 3 节的手动服务进程仍在运行，可以先停止它；以下脚本会启动一个独立的服务端子进程。激活同一虚拟环境，然后从项目根目录执行：
+如果第 6 节的手动服务进程仍在运行，可以先停止它；以下脚本会启动一个独立的服务端子进程。激活同一虚拟环境，然后从项目根目录执行：
 
 ```bash
 python - <<'PY'
@@ -121,7 +176,7 @@ Hello from Bale Harness MCP.
 
 `output/` 是运行时产物，已被 Git 忽略。
 
-## 5. 配置常见 MCP 客户端
+## 8. 配置常见 MCP 客户端
 
 对于采用 `mcpServers` JSON 配置的客户端，可按其配置格式添加以下条目。将三个绝对路径替换为本机实际路径：
 
@@ -148,7 +203,7 @@ Hello from Bale Harness MCP.
 
 不同客户端的配置入口可能不同，但服务端启动参数保持不变。
 
-## 6. 基础使用约束
+## 9. 基础使用约束
 
 - 工具只接受 `content` 字符串，不接受目标文件路径。
 - 文件统一命名为 `note_YYYYMMDD_HHMMSS.txt`。
@@ -156,7 +211,7 @@ Hello from Bale Harness MCP.
 - 文件操作异常会作为文本返回，调用方应检查返回内容和实际文件。
 - 当前示例不具备工作区隔离或权限审批，只应在受控目录中运行。
 
-## 7. 常见问题排查
+## 10. 常见问题排查
 
 ### `ModuleNotFoundError: No module named 'mcp'`
 
@@ -181,7 +236,7 @@ python -m pip check
 
 ### 服务端启动后没有输出
 
-这是 `stdio` 服务的正常行为。使用第 4 节客户端脚本验证，不要把该进程当作交互式 REPL。
+这是 `stdio` 服务的正常行为。使用第 7 节客户端脚本验证，不要把该进程当作交互式 REPL。
 
 ### 工具调用成功但找不到文件
 
@@ -199,16 +254,21 @@ python -m pip check
 
 确保服务代码没有向标准输出打印日志。`stdio` 必须保留给 MCP 消息；诊断信息应使用标准错误或结构化日志方案。
 
-## 8. 修改后的验证
+## 11. 修改后的验证
 
-语法检查：
+完整基础检查：
 
 ```bash
-python -m compileall examples
 python -m pip check
+ruff check src tests
+ruff format --check src tests
+pytest -q
+python -m compileall examples
 ```
 
-行为验证：重新执行第 4 节脚本，确认：
+测试覆盖契约、配置、FakeProvider、CLI/HTTP 同构、HTTP 输入校验和 MCP 示例语法，不需要网络或 API Key。仓库已配置 GitHub Actions，但远程结果应以 Actions 页面为准。
+
+修改 MCP 示例后，重新执行第 7 节脚本，确认：
 
 - `write_file` 出现在工具列表中；
 - 工具调用无异常；
@@ -216,9 +276,7 @@ python -m pip check
 - 文件内容与传入字符串完全一致；
 - 客户端退出后没有残留服务进程。
 
-当前仓库没有独立自动化测试目录。新增 Runtime 或复杂工具逻辑时，应同时建立测试目录和可重复执行的测试命令。
-
-## 9. 下一步
+## 12. 下一步
 
 - 了解当前实现与目标模块的边界：[架构设计](architecture.md)。
 - 返回项目功能、结构和贡献说明：[README](../README.md)。

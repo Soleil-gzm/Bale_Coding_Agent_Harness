@@ -4,7 +4,7 @@
 
 本文同时记录两类内容：
 
-- **当前实现**：仓库中已经存在、可以运行和验证的 FastMCP 文件写入示例。
+- **当前实现**：B0 工程骨架、Turn/ToolResult 契约、Settings、ModelProvider/FakeProvider、共享 Turn 构造入口，以及可独立运行的 FastMCP 文件写入示例。
 - **目标架构**：Coding Agent Harness 的后续设计方向，用于约束模块边界和扩展方式。
 
 除特别注明外，带有“规划”“目标”或“后续”标识的模块均未在当前仓库实现。文档中的目标接口是逻辑契约，不代表已有 Python 类或稳定 API。
@@ -31,11 +31,35 @@
 
 ### 2.2 当前非目标
 
-当前示例不提供自动代码修改、通用命令执行、多模型路由、多智能体调度、Web 前端、权限系统或生产级隔离。后续实现也应避免在缺少证据时将这些能力视为已经具备。
+当前实现不提供 Turn 执行、真实模型调用、自动代码修改、通用命令执行、多模型路由、多智能体调度、Web 前端、权限系统、持久化或生产级隔离。后续实现也应避免在缺少证据时将这些能力视为已经具备。
 
 ## 3. 当前实现架构
 
-### 3.1 分层视图
+### 3.1 B0 核心契约与入口
+
+```mermaid
+flowchart LR
+    CLI[bale turn] --> Request[TurnRequest]
+    HTTP[POST /v1/turns] --> Request
+    Request --> Factory[build_turn]
+    Factory --> Turn[Created Turn]
+    Settings[Settings] --> ProviderFactory[Provider Factory]
+    ProviderFactory --> Fake[FakeProvider]
+    ProviderFactory -->|openai| Error[Configuration or implementation error]
+```
+
+| 当前模块 | 职责 | 边界 |
+|---|---|---|
+| `contracts.py` | 定义 Turn、ToolResult、审批模式和状态类型 | 只校验数据，不调度执行 |
+| `settings.py` | 读取 `BALE_` 配置、保护 Secret、校验 OpenAI Key | 不打印配置或密钥 |
+| `providers.py` | 定义最小 ModelProvider、FakeProvider 和工厂 | 真实 OpenAIProvider 未实现 |
+| `turns.py` | 校验入口输入并统一构造 `created` Turn | 不创建 workspace，不执行 Turn |
+| `cli.py` | 将命令行参数转换为 TurnRequest 并输出 JSON | 初始化配置和 Provider，但不调用 `complete()` |
+| `http.py` | 通过应用工厂暴露 `POST /v1/turns` | 无执行、Session、SSE、健康检查或持久化 |
+
+CLI 和 HTTP 对相同输入生成相同的非 ID 字段；`turn_id` 和 `session_id` 分别随机生成。HTTP 环境在调用 `create_app()` 时加载，导入模块本身不读取环境。
+
+### 3.2 MCP 分层视图
 
 ```mermaid
 flowchart LR
@@ -54,9 +78,9 @@ flowchart LR
 | 文件适配 | `os`、`open` | 创建输出目录并以 UTF-8 写入 |
 | 运行环境 | Python 进程 | 提供当前工作目录、系统时间和文件系统权限 |
 
-当前没有独立领域层、应用服务层或持久化层。示例应保持在 `examples/`，后续运行时模块不应依赖示例中的全局配置。
+核心契约位于 `src/bale_harness/`，MCP 示例保持在 `examples/` 且不与运行时模块共享全局配置。当前没有应用执行层或持久化层。
 
-### 3.2 当前模块职责
+### 3.3 MCP 模块职责
 
 实现位于 `examples/mcp/write_server.py`：
 
@@ -68,7 +92,7 @@ flowchart LR
 | 时间戳命名 | `note_YYYYMMDD_HHMMSS.txt` | 秒级精度，可能发生同秒覆盖 |
 | 错误处理 | 捕获文件操作异常并返回文本 | 尚未归一化为结构化错误 |
 
-### 3.3 当前数据流
+### 3.4 MCP 数据流
 
 ```mermaid
 sequenceDiagram
@@ -94,7 +118,7 @@ sequenceDiagram
 
 ## 4. 目标系统分层架构
 
-以下为后续 Coding Agent Harness 的设计，不是当前目录结构。
+当前已实现 CLI/HTTP 到 Turn 的构造路径。下图中 Turn 之后的 Agent Runtime 及其内部模块均为后续设计，不是当前目录结构或已有能力。
 
 ```mermaid
 flowchart TB
@@ -144,7 +168,7 @@ flowchart TB
 
 | 规划模块 | 核心职责 | 主要依赖方向 |
 |---|---|---|
-| `agent/turn.py` | Turn、预算、状态和入口归一化 | 仅依赖领域契约 |
+| `agent/turn.py` | 执行期恢复信息与后续状态扩展 | 当前 B0 Turn 契约 |
 | `agent/loop.py` | ReAct、终止、取消、重试预算、调用 ID | Provider、Registry、Checkpoint |
 | `agent/context.py` | 稳定前缀、检索装配、TokenBudget | Retriever、History |
 | `agent/history.py` | 按完整 Turn 裁剪并维持消息配对 | 领域消息模型 |
@@ -155,38 +179,39 @@ flowchart TB
 | `agent/checkpoint.py` | 独立快照、撤销、恢复和幂等 | Git、Session |
 | `sandbox/` | 本地、容器和远程执行适配 | 统一 Sandbox 端口 |
 | `repo_index/` | AST 切块、词法索引和行号引用 | Retriever 端口 |
-| `providers/` | 模型调用、用量和离线 Fake | ModelProvider 端口 |
-| `server/` | HTTP 任务、Session、审批和健康检查 | Runtime |
+| `providers/` | 真实模型调用、结构化输出和用量 | 当前 ModelProvider 端口 |
+| `server/` | HTTP 执行、Session、审批和健康检查 | Runtime、当前 Turn 构造入口 |
 | `tracing/` | Span、错误、Token、延迟和成本 | 无 Runtime 反向依赖 |
 | `eval/` | 固定任务、确定性验证和报告 | CLI、Workspace、Verifier |
 
-这些路径用于说明职责边界，后续实现时应以实际代码和测试为准更新本文。
+这些路径用于说明后续职责边界，不与当前 `src/bale_harness/` 文件一一对应。后续实现时应以实际代码和测试为准更新本文，不能把规划路径当作已有模块。
 
 ## 6. 核心逻辑契约
 
 ### 6.1 Turn
 
-| 字段组 | 目标内容 |
+| 字段组 | 当前实现 |
 |---|---|
-| 身份 | `turn_id`、`session_id`、`workspace` |
-| 输入 | 当前消息、可选仓库 revision |
-| 预算 | 最大迭代、Token、成本、时间 |
-| 权限 | 自动只读、写前审批或全部审批 |
-| 状态 | created、running、waiting_approval、completed、failed、cancelled |
-| 恢复 | 最近 Checkpoint、已执行调用 ID、恢复位置 |
+| 身份 | `turn_id`、`session_id` 为 UUID，默认分别使用 `uuid4` |
+| 输入 | 非空且去除首尾空白的 `message`、`workspace: Path`、可选 `repo_revision` |
+| 预算 | `max_iterations=20` 且至少为 1、`token_budget > 0`、`cost_budget=None` 且设置时非负 |
+| 权限 | `auto_read`、`approve_write`、`approve_all`，默认 `approve_write` |
+| 状态 | `created`、`running`、`waiting_approval`、`completed`、`failed`、`cancelled`，默认 `created` |
 
-CLI 与 HTTP 应构造同一种 Turn，避免入口行为不一致。
+Turn 禁止未知字段并支持 JSON 序列化/反序列化。构造 Turn 不会创建 workspace；时间预算、Checkpoint、已执行调用 ID 和恢复位置仍是后续扩展。
+
+CLI 与 HTTP 通过唯一的 `build_turn()` 构造 Turn，避免入口行为不一致。审批模式和后续状态当前只是数据契约，不表示已有审批或状态机执行逻辑。
 
 ### 6.2 Tool 与 ToolResult
 
-工具定义需要包含名称、JSON Schema、副作用类型、并发安全性、超时和输出限制。逻辑结果至少包含：
+当前 `ToolResult` 数据契约包含：
 
-- `call_id`、工具名称和执行状态；
-- 文本内容、结构化错误码和延迟；
-- 是否截断、是否取消以及必要元数据；
-- `read | write | execute` 副作用分类。
+- `call_id`、工具名称和 `success | error | timeout | denied | cancelled` 状态；
+- 文本内容、可选结构化错误码和非负 `latency_ms`；
+- `truncated=False` 和默认独立字典 `metadata`；
+- 未知字段拒绝与 JSON 序列化/反序列化。
 
-只有标记为只读且并发安全的工具可以并行执行；写入和执行工具默认串行。
+后续工具定义还需要名称、JSON Schema、`read | write | execute` 副作用类型、并发安全性、超时和输出限制。这些属于 ToolRegistry 规划，不是当前工具执行能力。目标调度规则是：只有标记为只读且并发安全的工具可以并行执行；写入和执行工具默认串行。
 
 ### 6.3 SearchHit
 
@@ -237,17 +262,20 @@ available_history = context_window
 
 | 技术 | 选择原因 | 限制 |
 |---|---|---|
-| Python 3.10+ | 与 MCP SDK 1.30.0 对齐 | 当前未声明更窄的解释器兼容矩阵 |
-| `asyncio` | 与 MCP 异步工具模型一致 | 文件写入本身仍是本地同步操作 |
-| FastMCP | 用少量代码声明工具和 Schema | 不等同于完整 Agent 工具治理 |
+| Python 3.11+ | 与当前包元数据和异步契约对齐 | 本地仅验证 3.11.18 |
+| Pydantic v2、pydantic-settings | 严格数据校验、环境配置和 Secret 保护 | 配置加载不代表真实 Provider 可用 |
+| Typer、FastAPI、Uvicorn | 共享 TurnRequest 与 build_turn | 只创建 Turn，不执行 |
+| `asyncio`、Protocol | 统一最小异步 Provider 契约 | FakeProvider 不访问网络 |
+| FastMCP、`mcp==1.30.0` | 用少量代码声明示例工具和 Schema | 不等同于完整 Agent 工具治理 |
 | MCP `stdio` | 本地进程集成简单、无需开放端口 | 客户端必须管理进程生命周期 |
-| 本地文本文件 | 示例无需外部服务 | 不提供并发、权限或持久化保证 |
+| pytest、Ruff、pip-tools | 离线测试、静态检查和可复现安装 | 本地通过不等于远程 CI 已运行 |
+| 本地文本文件 | MCP 示例无需外部服务 | 不提供并发、权限或持久化保证 |
 
 ### 8.2 目标技术栈
 
 | 领域 | 建议选型 | 选择理由 |
 |---|---|---|
-| 语言与契约 | Python 3.12、Pydantic v2 | 类型化配置、契约和异步运行时 |
+| 语言与契约 | Python 3.11+、Pydantic v2 | 类型化配置、契约和异步运行时 |
 | CLI / HTTP | Typer、FastAPI | 共享 Turn，分别提供本地与服务入口 |
 | 模型 | OpenAI-compatible Provider、FakeProvider | 统一接口并支持离线测试 |
 | 状态 | SQLite | 轻量、可恢复、低部署成本 |
@@ -261,7 +289,7 @@ available_history = context_window
 
 ## 9. 扩展点设计
 
-以下接口方向用于降低实现耦合：
+当前 `ModelProvider` 仅定义 `async complete(turn: Turn) -> str`，FakeProvider 是该最小契约的离线实现。以下接口方向用于降低后续实现耦合，不代表这些扩展能力已经存在：
 
 | 扩展点 | 调用方 | 实现方应提供的能力 |
 |---|---|---|
@@ -300,7 +328,16 @@ available_history = context_window
 
 ## 11. 测试与验证设计
 
-当前示例可通过 MCP 客户端执行初始化、`list_tools` 和 `call_tool`，并检查输出文件内容。后续完整运行时应分层验证：
+当前 pytest 覆盖契约、配置、FakeProvider、CLI/HTTP 同构和输入校验；MCP 示例可通过客户端执行初始化、`list_tools` 和 `call_tool`，并检查输出文件内容。基础检查命令为：
+
+```bash
+ruff check src tests
+ruff format --check src tests
+pytest -q
+python -m compileall examples
+```
+
+仓库已配置 Python 3.11 GitHub Actions 工作流；远程运行状态应以 Actions 实际结果为准。后续完整运行时应分层验证：
 
 1. **单元测试**：预算、裁剪、注册、路径、错误和状态机。
 2. **契约测试**：Provider、Tool、Retriever、Sandbox、Store 的不同实现。
