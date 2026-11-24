@@ -1,6 +1,6 @@
 # Bale Coding Agent Harness 快速启动指南
 
-本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时、B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、审批与 ShadowGit）、B3 上下文与会话运行时（Token 预算、历史裁剪、SQLite Session、取消恢复）、B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）、B5 运行报告（Session/Trace 到 Markdown）和 FastMCP 文件写入示例。真实 OpenAIProvider 与 Docker 容器隔离尚未实现；B2a 的本地执行只适用于受控开发场景。默认 Fake 配置不需要模型、数据库服务或容器服务。
+本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时、B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、审批与 ShadowGit）、B3 上下文与会话运行时（Token 预算、历史裁剪、SQLite Session、取消恢复）、B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）、B5 运行报告（Session/Trace 到 Markdown）、B6 本地闭环增强（持久化 Checkpoint 与 `undo`、`session`/`trace` 检查、`chat` 多轮、扩展写入工具、OpenAI 兼容 Provider）和 FastMCP 文件写入示例。Docker 容器隔离尚未实现；B2a 的本地执行只适用于受控开发场景。默认 Fake 配置不需要模型、数据库服务或容器服务。
 
 ## 1. 环境要求
 
@@ -11,7 +11,7 @@
 | MCP 客户端 | 支持 `stdio` 的客户端，或使用本文 Python 脚本 | 初始化和调用工具 |
 | 文件系统权限 | 对启动目录具有写权限 | 创建 `output/` 和文本文件 |
 
-默认 Fake 配置和 MCP 示例不需要 GPU、Docker、数据库或 API Key。选择 `openai` 时必须配置 Key，但真实 Provider 目前仍会明确报告未实现。
+默认 Fake 配置和 MCP 示例不需要 GPU、Docker、数据库或 API Key。选择 `openai` 时可连接 OpenAI、DeepSeek 或本地 Ollama；远程端点必须配置 Key。
 
 ## 2. 安装
 
@@ -63,13 +63,25 @@ cp .env.example .env
 | 环境变量 | 当前行为 |
 |---|---|
 | `BALE_PROVIDER` | `fake` 或 `openai`，默认 `fake` |
-| `BALE_OPENAI_API_KEY` | `openai` 模式必填，空白值视为缺失，使用 SecretStr 保护 |
+| `BALE_OPENAI_API_KEY` | 远程 `openai` 端点必填，空白值视为缺失，使用 SecretStr 保护；本地回环端点可省略 |
+| `BALE_OPENAI_BASE_URL` | OpenAI 兼容端点，默认 `https://api.openai.com/v1` |
+| `BALE_OPENAI_MODEL` | 模型名，默认 `gpt-4o-mini` |
 | `BALE_CONTEXT_WINDOW` | 上下文窗口 token 数，默认 `128000`；与 `turn.token_budget` 独立 |
 | `BALE_TRACE_PATH` | 默认 JSONL 追踪文件；被 `--trace` 覆盖，留空则不写 |
 | `BALE_INPUT_COST_PER_1K` | 输入 token 每千价格；需与下一项同时配置 |
 | `BALE_OUTPUT_COST_PER_1K` | 输出 token 每千价格；未同时配置时不估算成本 |
 
-`openai` 模式缺少有效 Key 时会在初始化阶段失败。即使 Key 有效，Provider 工厂也会报告真实 OpenAIProvider 尚未实现，不会静默退回 Fake。`.env` 已被 Git 忽略，不要提交真实密钥或打印完整 Settings。
+远程 `openai` 端点缺少有效 Key 时会在初始化阶段失败；`http://localhost`、`http://127.0.0.1` 等本地端点可免 Key。`.env` 已被 Git 忽略，不要提交真实密钥或打印完整 Settings。
+
+常用端点示例：
+
+| 服务 | `BALE_OPENAI_BASE_URL` | `BALE_OPENAI_MODEL` | Key |
+|---|---|---|---|
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` | 必填 |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` | 必填 |
+| Ollama | `http://127.0.0.1:11434/v1` | `qwen2.5-coder:7b` | 可省略 |
+
+Ollama 需先 `ollama pull qwen2.5-coder:7b`；7B 量化模型约 4.7GB，适合 8GB 显存级别显卡，更大模型会显著变慢或溢出到内存。
 
 ## 4. 使用 CLI 创建 Turn
 
@@ -162,7 +174,7 @@ bale run \
 - 执行前已记录 `pending`、但没有结果的调用不会被重放，而是合成 `outcome_unknown` 的 tool 消息回注模型。
 - 每个 Turn 完成（`completed`）后写入一条有界记忆摘要；下个 Turn 的稳定系统前缀会包含最近 5 条。
 - Token 预算分两层：`turn.token_budget`（累计 `total_tokens` 上限）与 `BALE_CONTEXT_WINDOW`（上下文窗口裁剪）。Token 数为确定性估算，不等于 Provider 计费值。
-- ShadowGit 的 git-dir 仍使用进程临时目录，恢复后的 `diff` 只覆盖恢复后的改动。
+- 传入 `--session-db` 或 `--checkpoint-dir` 时，ShadowGit git-dir 会持久化到 `<session_db 父目录>/checkpoints/<session_id>`；否则仍使用进程临时目录。
 
 ### 4.4 追踪与成本
 
@@ -211,6 +223,58 @@ bale report \
 - 记忆：写入的 `after_turn` 摘要。
 
 省略 `--output` 时输出到标准输出。Session 不存在、没有 Turn 或 Trace 路径无效时命令以非零状态退出；报告不调用模型，也不修改数据库。
+
+### 4.6 多轮交互
+
+`bale chat` 在同一个 Session 上循环执行 Turn；输入 `/exit` 或 `/quit` 退出：
+
+```bash
+bale chat \
+  --workspace "$PWD" \
+  --session-db "$PWD/.bale/sessions.db" \
+  --session-id 6f1c1f6e-2e0e-4d0e-9d1e-2f7f1a9b8c11 \
+  --yes
+```
+
+- 每行输入生成一个独立 Turn；跨 Turn 连续性来自 Session 的 `after_turn` 记忆摘要，不携带完整历史。
+- `--no-shadow-git` 可关闭快照；传 `--session-db` 时 Checkpoint 会持久化，可直接配合 `bale undo`。
+- 写/执行工具需要审批；非交互环境请使用 `--yes`，否则会被拒绝并回报给模型。
+
+### 4.7 检查 Session/Trace 与撤销改动
+
+```bash
+bale session list --session-db "$PWD/.bale/sessions.db"
+bale session list --session-db "$PWD/.bale/sessions.db" --json
+bale session show --session-db "$PWD/.bale/sessions.db" \
+  --session-id 6f1c1f6e-2e0e-4d0e-9d1e-2f7f1a9b8c11
+bale trace --trace "$PWD/.bale/trace.jsonl" --limit 5
+```
+
+`bale undo` 从持久化 Checkpoint 恢复工作区，默认回到基线：
+
+```bash
+bale undo \
+  --workspace "$PWD" \
+  --session-id 6f1c1f6e-2e0e-4d0e-9d1e-2f7f1a9b8c11 \
+  --session-db "$PWD/.bale/sessions.db" \
+  --yes
+```
+
+- 必须提供 `--session-db` 或 `--checkpoint-dir`，且目录中已有 ShadowGit `HEAD`。
+- 未传 `--yes` 时会要求交互确认；`--snapshot <commit>` 可恢复到指定快照。
+- 撤销会覆盖工作区当前内容，包括基线之后新建的文件。
+
+### 4.8 写入工具
+
+除 `write_file`、`edit_file` 外，B6 增加了：
+
+| 工具 | 行为 |
+|---|---|
+| `move_file(source, destination)` | 移动文件；目标已存在时拒绝，自动创建父目录 |
+| `delete_file(path)` | 仅删除普通文件，目录和不存在路径返回错误 |
+| `apply_patch(path, replacements)` | 按顺序应用 `{old, new}` 精确替换；每条必须恰好匹配一次，全部成功才原子写回 |
+
+三者均为写副作用，需要审批。
 
 ## 5. 使用 HTTP 创建 Turn
 
@@ -398,7 +462,7 @@ pytest -q
 python -m compileall examples
 ```
 
-测试覆盖契约、配置、FakeProvider、CLI/HTTP 同构、HTTP 输入校验、B1 只读运行时（消息契约、路径防护、工具注册器、只读工具、ReAct 循环、CLI run）、B2a 写入运行时（审批策略、Sandbox 防护、ShadowGit、写入/编辑、执行工具、幂等与端到端改码闭环）、B3 上下文与会话（预算非负、整 Turn 裁剪与配对、稳定前缀、SQLite 往返与事务回滚、记忆、取消恢复与不重复写入）、B4 追踪与成本（事件顺序、追加写入、脱敏、失败不阻断、成本估算）、B5 运行报告（Session 顺序、Trace 回读、报告内容、`--output`）和 MCP 示例语法，不需要网络或 API Key。部分测试会在临时目录启动真实 pytest 子进程。仓库已配置 GitHub Actions，但远程结果应以 Actions 页面为准。
+测试覆盖契约、配置、FakeProvider、CLI/HTTP 同构、HTTP 输入校验、B1 只读运行时（消息契约、路径防护、工具注册器、只读工具、ReAct 循环、CLI run）、B2a 写入运行时（审批策略、Sandbox 防护、ShadowGit、写入/编辑、执行工具、幂等与端到端改码闭环）、B3 上下文与会话（预算非负、整 Turn 裁剪与配对、稳定前缀、SQLite 往返与事务回滚、记忆、取消恢复与不重复写入）、B4 追踪与成本（事件顺序、追加写入、脱敏、失败不阻断、成本估算）、B5 运行报告（Session 顺序、Trace 回读、报告内容、`--output`）、B6 本地闭环（Session 汇总、Checkpoint 跨进程基线、`session`/`trace`/`chat`/`undo`、扩展写入工具、OpenAI 兼容 Provider 映射/重试/脱敏、本地端点免 Key）和 MCP 示例语法，不需要网络或 API Key。部分测试会在临时目录启动真实 pytest 子进程。仓库已配置 GitHub Actions，但远程结果应以 Actions 页面为准。
 
 修改 MCP 示例后，重新执行第 7 节脚本，确认：
 

@@ -2,23 +2,23 @@
 
 Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目标是将模型交互、工具治理、上下文管理、隔离执行、状态恢复和执行证据组织为可扩展的薄内核。
 
-**当前仓库处于早期建设阶段。** 已落地 B0 工程基础、B1 只读 ReAct 运行时、B2a 写入运行时、B3 上下文/会话运行时、B4 追踪/成本运行时和 B5 运行报告：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider、只创建 Turn 的 CLI/HTTP 入口，带审批、ShadowGit 快照和本地 Sandbox 的 `bale run`，Token 预算、历史裁剪、SQLite Session 与取消恢复，JSONL Trace 与可选成本估算，以及基于 Session/Trace 的 Markdown 报告。真实 OpenAIProvider、Docker 容器隔离与远程 Trace 导出仍未实现。
+**当前仓库处于早期建设阶段。** 已落地 B0 工程基础、B1 只读 ReAct 运行时、B2a 写入运行时、B3 上下文/会话运行时、B4 追踪/成本运行时、B5 运行报告和 B6 本地闭环增强：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider 与 OpenAI 兼容 Provider、只创建 Turn 的 CLI/HTTP 入口，带审批、ShadowGit 快照和本地 Sandbox 的 `bale run`，Token 预算、历史裁剪、SQLite Session 与取消恢复，JSONL Trace 与可选成本估算，基于 Session/Trace 的 Markdown 报告，持久化 Checkpoint 与 `bale undo`，`bale chat` 多轮交互，`bale session`/`bale trace` 检查命令，以及 `move_file`/`delete_file`/`apply_patch` 写入工具。Docker 容器隔离、检索与 HTTP 执行接口仍未实现。
 
 ## 当前功能
 
 ### 核心契约与入口
 
 - `Turn` 和 `ToolResult` 使用 Pydantic 校验，支持严格字段检查和 JSON 往返。
-- `Settings` 读取 `BALE_` 环境变量；`openai` 模式缺少有效 Key 时立即报错，密钥不会在 `repr` 中明文显示。
-- `ModelProvider` 定义最小异步契约，`FakeProvider` 提供确定性离线响应并记录收到的 Turn。
+- `Settings` 读取 `BALE_` 环境变量；`openai` 模式缺少有效 Key 时立即报错（本地 Ollama 端点除外），密钥不会在 `repr` 中明文显示。
+- `ModelProvider` 定义最小异步契约，`FakeProvider` 提供确定性离线响应并记录收到的 Turn；`OpenAICompatibleProvider` 通过标准库 `urllib` 调用任意 OpenAI 兼容 `/chat/completions` 端点（OpenAI、DeepSeek、Ollama），429/5xx 指数退避，错误信息自动脱敏。
 - `bale turn` 与 `POST /v1/turns` 复用同一 `build_turn()` 构造逻辑，返回字段一致的 `created` Turn。
 - CLI 和 HTTP 只创建 Turn，不调用模型或工具。
 
 ### 只读与写入运行时
 
 - `ToolRegistry` 统一处理参数校验、审批、`call_id` 幂等、超时、错误归一化和只读并发。
-- 只读工具：`read_file`、`list_files`、`search_files`、`git_diff`；写入工具：`write_file`、`edit_file`；执行工具：`shell`、`run_tests`；`finish` 显式结束任务。
-- `WorkspaceGuard` 阻止 `..` 与符号链接逃逸；写入采用临时文件加原子替换。
+- 只读工具：`read_file`、`list_files`、`search_files`、`git_diff`；写入工具：`write_file`、`edit_file`、`move_file`、`delete_file`、`apply_patch`；执行工具：`shell`、`run_tests`；`finish` 显式结束任务。
+- `WorkspaceGuard` 阻止 `..` 与符号链接逃逸；写入采用临时文件加原子替换；`apply_patch` 要求每条旧文本恰好匹配一次，全部成功才写盘。
 - `PolicyApprover` 支持 `auto_read`、`approve_write`、`approve_all`，无审批人时写/执行一律拒绝。
 - `LocalSandbox` 提供命令 deny-list、环境变量白名单、cwd 限定、超时和输出截断；它不是不可信代码的安全边界。
 - `ShadowGit` 使用独立 git-dir 做基线与逐迭代快照，输出相对基线的 Diff，不读写工作区自己的 `.git`。
@@ -44,25 +44,38 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - `bale report` 读取 SQLite Session 与可选 JSONL Trace，生成只读 Markdown 报告：会话概要、每个 Turn 的状态/用量/任务与答案、工具调用表、Trace 事件计数和记忆摘要。
 - 报告不调用模型、不修改 Session；默认输出到标准输出，`--output` 可直接写入文件。
 
+### Checkpoint 持久化与撤销
+
+- 传入 `--session-db` 或显式 `--checkpoint-dir` 时，ShadowGit 的 git-dir 会保留在 `<session_db 父目录>/checkpoints/<session_id>`（若该路径位于 workspace 内则回退到系统临时目录）；不再随进程退出删除。
+- 复用已有 git-dir 时以原 `HEAD` 作为基线，因此恢复后的 Diff 仍覆盖恢复之前的全部改动。
+- `bale undo` 从持久化 Checkpoint 恢复工作区；默认回到基线，可用 `--snapshot` 指定某个快照，必须 `--yes` 或交互确认。
+
+### 会话、追踪检查与多轮交互
+
+- `bale session list` 按更新时间列出 Session 与 Turn 数；`bale session show` 展示某个 Session 的 Turn 明细；两者支持 `--json`。
+- `bale trace` 汇总 JSONL Trace 的事件计数、模型耗时与工具耗时，`--limit N` 可追加最近 N 条事件原文。
+- `bale chat` 在同一个 Session 上循环执行 Turn，输入 `/exit` 或 `/quit` 退出；跨 Turn 连续性依赖 Session 记忆，不携带完整对话历史。
+
 ### MCP 文件写入示例
 
 - 使用 `FastMCP` 创建名为 `WriteServer` 的 MCP 服务，通过标准输入输出通信。
 - 注册异步 `write_file(content: str)` 工具，将内容以 UTF-8 写入 `output/note_<时间戳>.txt`。
 - 返回写入结果或错误文本，便于验证 MCP list/call 流程。
 
-当前功能不需要模型 API、数据库服务、Docker 或 GPU；Session 使用标准库 `sqlite3`，ShadowGit 快照需要本机可用的 `git`。
+默认 Fake 配置不需要模型 API、数据库服务、Docker 或 GPU；`openai` 模式可连接 DeepSeek 或本地 Ollama。Session 使用标准库 `sqlite3`，ShadowGit 快照需要本机可用的 `git`。
 
 ## 功能边界
 
 当前实现提供契约、Turn 构造入口和受控的本地执行闭环，不是完整的 Coding Agent：
 
-- 真实 OpenAIProvider 尚未实现；即使配置了有效 Key，`openai` 模式也会明确报告未实现，不会退回 Fake。
+- OpenAI 兼容 Provider 只实现非流式 Chat Completions（`temperature=0`），不支持流式输出、多模型路由或结构化输出参数。
 - 不包含 Docker Sandbox 或不可信代码隔离；`LocalSandbox` 仅适用于受控开发场景。
 - Session 持久化基于本地 SQLite 文件，不提供多进程协调、远程存储或 HTTP Session 接口。
-- ShadowGit 的 git-dir 仍是进程临时目录，恢复后的 Diff 只覆盖恢复之后的改动。
+- Checkpoint 目录已可持久化并支持 `bale undo`，但没有快照浏览/清理命令，也依赖本机 `git`。
 - Trace 为本地追加 JSONL，无轮转、采样或远程导出；`estimated_cost` 只是按配置费率的估算，不代表 Provider 账单。
 - 运行报告是只读 Markdown 投影，只提供 CLI 入口，不包含 HTML/PDF 导出或 HTTP 报告接口。
-- 不包含 Checkpoint 目录持久化、Trace、评测、SSE 或 HTTP 执行接口。
+- 不包含检索（BM25/向量）、评测 harness、SSE 或 HTTP 执行接口。
+- `bale chat` 的跨 Turn 连续性依赖 Session 记忆摘要，不携带完整历史，也不会自动压缩超长对话。
 - 审批只在 CLI 中提供交互确认与 `--yes`，没有 HTTP 审批流。
 - MCP 示例的文件名精度为秒，同一秒内的重复调用可能覆盖同名文件。
 - MCP 输出目录相对于进程当前工作目录，不应将其误认为安全沙箱。
@@ -76,7 +89,8 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 | 语言 | Python 3.11+ | 本地已在 Python 3.11.18 验证 |
 | 数据与配置 | Pydantic v2、pydantic-settings | 严格契约、环境变量与 `.env` |
 | CLI / HTTP | Typer、FastAPI、Uvicorn | 共享 Turn 构造逻辑 |
-| Provider | Protocol、FakeProvider | 最小异步接口与离线测试实现 |
+| Provider | Protocol、FakeProvider、OpenAI 兼容实现 | 最小异步接口、离线测试与真实端点 |
+| 网络客户端 | 标准库 `urllib` | 无新增运行时依赖，支持 DeepSeek/Ollama |
 | 工具治理 | ToolRegistry、PolicyApprover | 参数校验、审批、幂等、超时与错误归一化 |
 | 本地执行 | LocalSandbox、ShadowGit | 子进程防护层与独立 git-dir 快照 |
 | 上下文与会话 | ContextBuilder、HistoryTrimmer、SessionStore | Token 预算、整 Turn 裁剪与 SQLite 持久化 |
@@ -95,8 +109,10 @@ Bale_Coding_Agent_Harness/
 │   ├── contracts.py          # Turn、ToolResult 与状态类型
 │   ├── settings.py           # BALE_ 配置与密钥校验
 │   ├── providers.py          # ModelProvider、FakeProvider 与工厂
+│   ├── providers_openai.py   # OpenAI 兼容 Provider（DeepSeek/Ollama）
+│   ├── py.typed              # PEP 561 类型标记
 │   ├── turns.py              # TurnRequest 与共享 build_turn()
-│   ├── cli.py                # bale turn / bale run
+│   ├── cli.py                # bale turn/run/chat/report/session/trace/undo
 │   ├── http.py               # POST /v1/turns 应用工厂
 │   └── agent/                # ReAct 运行时
 │       ├── messages.py       # 运行时消息与工具契约
@@ -110,7 +126,7 @@ Bale_Coding_Agent_Harness/
 │       ├── report.py         # Session/Trace 到 Markdown 报告
 │       ├── approval.py       # 审批策略
 │       ├── sandbox.py        # Sandbox 端口与 LocalSandbox
-│       ├── checkpoint.py     # ShadowGit 快照
+│       ├── checkpoint.py     # ShadowGit 快照与持久化恢复
 │       ├── loop.py           # AgentLoop 与 RunResult
 │       └── tools/            # registry、内置/写入/执行/git 工具
 ├── tests/                    # 契约、配置、入口与运行时测试
@@ -192,6 +208,43 @@ bale report \
   --session-id 6f1c1f6e-2e0e-4d0e-9d1e-2f7f1a9b8c11 \
   --trace "$PWD/.bale/trace.jsonl" \
   --output "$PWD/.bale/report.md"
+```
+
+在同一 Session 上开始多轮交互：
+
+```bash
+bale chat \
+  --workspace "$PWD" \
+  --session-db "$PWD/.bale/sessions.db" \
+  --session-id 6f1c1f6e-2e0e-4d0e-9d1e-2f7f1a9b8c11 \
+  --yes
+```
+
+检查 Session 与 Trace，并撤销未提交的改动：
+
+```bash
+bale session list --session-db "$PWD/.bale/sessions.db"
+bale session show --session-db "$PWD/.bale/sessions.db" --session-id 6f1c1f6e-2e0e-4d0e-9d1e-2f7f1a9b8c11
+bale trace --trace "$PWD/.bale/trace.jsonl" --limit 5
+bale undo --workspace "$PWD" --session-id 6f1c1f6e-2e0e-4d0e-9d1e-2f7f1a9b8c11 \
+  --session-db "$PWD/.bale/sessions.db" --yes
+```
+
+使用 DeepSeek 或本地 Ollama 作为真实 Provider：
+
+```bash
+# DeepSeek
+export BALE_PROVIDER=openai
+export BALE_OPENAI_API_KEY=sk-...
+export BALE_OPENAI_BASE_URL=https://api.deepseek.com/v1
+export BALE_OPENAI_MODEL=deepseek-chat
+
+# Ollama（无需 Key，本地模型需先 ollama pull qwen2.5-coder:7b）
+export BALE_PROVIDER=openai
+export BALE_OPENAI_BASE_URL=http://127.0.0.1:11434/v1
+export BALE_OPENAI_MODEL=qwen2.5-coder:7b
+
+bale run --message "Inspect the repository" --workspace "$PWD" --yes
 ```
 
 启动只提供 Turn 创建接口的 HTTP 应用：
