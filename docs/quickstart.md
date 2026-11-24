@@ -1,6 +1,6 @@
 # Bale Coding Agent Harness 快速启动指南
 
-本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时、B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、审批与 ShadowGit）、B3 上下文与会话运行时（Token 预算、历史裁剪、SQLite Session、取消恢复）和 FastMCP 文件写入示例。真实 OpenAIProvider 与 Docker 容器隔离尚未实现；B2a 的本地执行只适用于受控开发场景。默认 Fake 配置不需要模型、数据库服务或容器服务。
+本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时、B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、审批与 ShadowGit）、B3 上下文与会话运行时（Token 预算、历史裁剪、SQLite Session、取消恢复）、B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）和 FastMCP 文件写入示例。真实 OpenAIProvider 与 Docker 容器隔离尚未实现；B2a 的本地执行只适用于受控开发场景。默认 Fake 配置不需要模型、数据库服务或容器服务。
 
 ## 1. 环境要求
 
@@ -65,6 +65,9 @@ cp .env.example .env
 | `BALE_PROVIDER` | `fake` 或 `openai`，默认 `fake` |
 | `BALE_OPENAI_API_KEY` | `openai` 模式必填，空白值视为缺失，使用 SecretStr 保护 |
 | `BALE_CONTEXT_WINDOW` | 上下文窗口 token 数，默认 `128000`；与 `turn.token_budget` 独立 |
+| `BALE_TRACE_PATH` | 默认 JSONL 追踪文件；被 `--trace` 覆盖，留空则不写 |
+| `BALE_INPUT_COST_PER_1K` | 输入 token 每千价格；需与下一项同时配置 |
+| `BALE_OUTPUT_COST_PER_1K` | 输出 token 每千价格；未同时配置时不估算成本 |
 
 `openai` 模式缺少有效 Key 时会在初始化阶段失败。即使 Key 有效，Provider 工厂也会报告真实 OpenAIProvider 尚未实现，不会静默退回 Fake。`.env` 已被 Git 忽略，不要提交真实密钥或打印完整 Settings。
 
@@ -103,7 +106,9 @@ bale run --message "Inspect the repository" --workspace "$PWD"
   "diff": "",
   "checkpoints": [],
   "session_id": null,
-  "resumed": false
+  "resumed": false,
+  "duration_ms": 0,
+  "estimated_cost": null
 }
 ```
 
@@ -158,6 +163,32 @@ bale run \
 - 每个 Turn 完成（`completed`）后写入一条有界记忆摘要；下个 Turn 的稳定系统前缀会包含最近 5 条。
 - Token 预算分两层：`turn.token_budget`（累计 `total_tokens` 上限）与 `BALE_CONTEXT_WINDOW`（上下文窗口裁剪）。Token 数为确定性估算，不等于 Provider 计费值。
 - ShadowGit 的 git-dir 仍使用进程临时目录，恢复后的 `diff` 只覆盖恢复后的改动。
+
+### 4.4 追踪与成本
+
+传入 `--trace` 后，每次运行向同一文件追加 JSONL 事件，每行一条记录：
+
+```bash
+bale run \
+  --message "Inspect the repository" \
+  --workspace "$PWD" \
+  --trace "$PWD/.bale/trace.jsonl" \
+  --yes
+```
+
+单次完成运行的典型事件序列：
+
+```json
+{"seq":1,"ts":"2026-01-01T00:00:00+00:00","event":"turn_started","turn_id":"...","session_id":null,"data":{"resumed":false}}
+{"seq":2,"ts":"2026-01-01T00:00:00+00:00","event":"model_call","turn_id":"...","iteration":1,"duration_ms":3,"data":{"prompt_tokens":42,"prompt_messages":2,"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0},"has_tool_calls":false}}
+{"seq":3,"ts":"2026-01-01T00:00:00+00:00","event":"turn_finished","turn_id":"...","iteration":1,"status":"completed","duration_ms":5,"data":{"error":null,"iterations":1,"tool_calls":0,"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0},"estimated_cost":null}}
+```
+
+- 事件词表：`turn_started`、`model_call`、`tool_call`、`checkpoint`、`turn_finished`。
+- 不记录完整 Prompt、回答或工具参数，只记录规模、名称、状态与错误码。
+- `--resume` 会向同一文件追加事件，`seq` 从新运行重新计数。
+- 同时配置 `BALE_INPUT_COST_PER_1K` 与 `BALE_OUTPUT_COST_PER_1K` 后，`turn_finished.data.estimated_cost` 与 `RunResult.estimated_cost` 才有数值；它是估算，不是 Provider 账单。
+- 追踪写入失败（目录不可写、目标为目录等）只会跳过 trace，不影响 Turn 结果。
 
 ## 5. 使用 HTTP 创建 Turn
 
@@ -345,7 +376,7 @@ pytest -q
 python -m compileall examples
 ```
 
-测试覆盖契约、配置、FakeProvider、CLI/HTTP 同构、HTTP 输入校验、B1 只读运行时（消息契约、路径防护、工具注册器、只读工具、ReAct 循环、CLI run）、B2a 写入运行时（审批策略、Sandbox 防护、ShadowGit、写入/编辑、执行工具、幂等与端到端改码闭环）、B3 上下文与会话（预算非负、整 Turn 裁剪与配对、稳定前缀、SQLite 往返与事务回滚、记忆、取消恢复与不重复写入）和 MCP 示例语法，不需要网络或 API Key。部分测试会在临时目录启动真实 pytest 子进程。仓库已配置 GitHub Actions，但远程结果应以 Actions 页面为准。
+测试覆盖契约、配置、FakeProvider、CLI/HTTP 同构、HTTP 输入校验、B1 只读运行时（消息契约、路径防护、工具注册器、只读工具、ReAct 循环、CLI run）、B2a 写入运行时（审批策略、Sandbox 防护、ShadowGit、写入/编辑、执行工具、幂等与端到端改码闭环）、B3 上下文与会话（预算非负、整 Turn 裁剪与配对、稳定前缀、SQLite 往返与事务回滚、记忆、取消恢复与不重复写入）、B4 追踪与成本（事件顺序、追加写入、脱敏、失败不阻断、成本估算）和 MCP 示例语法，不需要网络或 API Key。部分测试会在临时目录启动真实 pytest 子进程。仓库已配置 GitHub Actions，但远程结果应以 Actions 页面为准。
 
 修改 MCP 示例后，重新执行第 7 节脚本，确认：
 

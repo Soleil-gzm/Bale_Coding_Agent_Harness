@@ -2,7 +2,7 @@
 
 Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目标是将模型交互、工具治理、上下文管理、隔离执行、状态恢复和执行证据组织为可扩展的薄内核。
 
-**当前仓库处于早期建设阶段。** 已落地 B0 工程基础、B1 只读 ReAct 运行时、B2a 写入运行时和 B3 上下文/会话运行时：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider、只创建 Turn 的 CLI/HTTP 入口，带审批、ShadowGit 快照和本地 Sandbox 的 `bale run`，以及 Token 预算、历史裁剪、SQLite Session 与取消恢复。真实 OpenAIProvider、Docker 容器隔离与 Trace 仍未实现。
+**当前仓库处于早期建设阶段。** 已落地 B0 工程基础、B1 只读 ReAct 运行时、B2a 写入运行时、B3 上下文/会话运行时和 B4 追踪/成本运行时：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider、只创建 Turn 的 CLI/HTTP 入口，带审批、ShadowGit 快照和本地 Sandbox 的 `bale run`，Token 预算、历史裁剪、SQLite Session 与取消恢复，以及 JSONL Trace 与可选成本估算。真实 OpenAIProvider、Docker 容器隔离与远程 Trace 导出仍未实现。
 
 ## 当前功能
 
@@ -32,6 +32,13 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - 取消或中断后，`bale run --resume` 复用原始 user 消息继续执行；已提交的写操作不会重复执行，结果未知的调用会以 `outcome_unknown` 回注模型。
 - `BALE_CONTEXT_WINDOW` 控制上下文窗口（默认 128000）；`turn.token_budget` 控制本 Turn 累计 token 上限。
 
+### 追踪与成本
+
+- `JsonlTraceExporter` 以追加方式记录 `turn_started`、`model_call`、`tool_call`、`checkpoint`、`turn_finished`，每条事件带序号、时间戳与耗时。
+- 追踪默认脱敏：不写完整 Prompt、回答或工具参数，只写 token 数、消息数、工具名、状态和错误码。
+- Trace 写入失败不会改变 Turn 结果；`bale run --trace path.jsonl` 启用，`BALE_TRACE_PATH` 可提供默认路径。
+- 同时配置 `BALE_INPUT_COST_PER_1K` 与 `BALE_OUTPUT_COST_PER_1K` 后，`RunResult.estimated_cost` 给出估算成本；未配置时为 `null`。
+
 ### MCP 文件写入示例
 
 - 使用 `FastMCP` 创建名为 `WriteServer` 的 MCP 服务，通过标准输入输出通信。
@@ -48,6 +55,7 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - 不包含 Docker Sandbox 或不可信代码隔离；`LocalSandbox` 仅适用于受控开发场景。
 - Session 持久化基于本地 SQLite 文件，不提供多进程协调、远程存储或 HTTP Session 接口。
 - ShadowGit 的 git-dir 仍是进程临时目录，恢复后的 Diff 只覆盖恢复之后的改动。
+- Trace 为本地追加 JSONL，无轮转、采样或远程导出；`estimated_cost` 只是按配置费率的估算，不代表 Provider 账单。
 - 不包含 Checkpoint 目录持久化、Trace、评测、SSE 或 HTTP 执行接口。
 - 审批只在 CLI 中提供交互确认与 `--yes`，没有 HTTP 审批流。
 - MCP 示例的文件名精度为秒，同一秒内的重复调用可能覆盖同名文件。
@@ -66,6 +74,7 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 | 工具治理 | ToolRegistry、PolicyApprover | 参数校验、审批、幂等、超时与错误归一化 |
 | 本地执行 | LocalSandbox、ShadowGit | 子进程防护层与独立 git-dir 快照 |
 | 上下文与会话 | ContextBuilder、HistoryTrimmer、SessionStore | Token 预算、整 Turn 裁剪与 SQLite 持久化 |
+| 观测 | JsonlTraceExporter、CostRates | 追加式 JSONL 事件与可选成本估算 |
 | 工具协议 | Model Context Protocol | MCP 示例使用 `stdio` transport |
 | SDK | `mcp==1.30.0` | 使用 `mcp.server.fastmcp.FastMCP` |
 | 测试与检查 | pytest、Ruff、pip-tools | 离线测试、静态检查与哈希锁文件 |
@@ -89,6 +98,8 @@ Bale_Coding_Agent_Harness/
 │       ├── context.py        # 稳定前缀、预算与记忆装配
 │       ├── session.py        # SQLite Session 与恢复状态
 │       ├── memory.py         # after_turn 记忆摘要
+│       ├── trace.py          # JSONL Trace 事件与导出器
+│       ├── cost.py           # 成本费率与估算
 │       ├── approval.py       # 审批策略
 │       ├── sandbox.py        # Sandbox 端口与 LocalSandbox
 │       ├── checkpoint.py     # ShadowGit 快照
@@ -152,6 +163,16 @@ bale run \
   --session-db "$PWD/.bale/sessions.db" \
   --session-id 6f1c1f6e-2e0e-4d0e-9d1e-2f7f1a9b8c11 \
   --resume \
+  --yes
+```
+
+记录本次运行的 JSONL 追踪（追加写入，可与 `--resume` 组合）：
+
+```bash
+bale run \
+  --message "Inspect the repository" \
+  --workspace "$PWD" \
+  --trace "$PWD/.bale/trace.jsonl" \
   --yes
 ```
 
