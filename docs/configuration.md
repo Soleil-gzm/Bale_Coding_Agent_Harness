@@ -77,7 +77,7 @@ Provider 只实现非流式 Chat Completions，`temperature=0`；不支持流式
 | `BALE_CONTEXT_WINDOW` | 单次模型调用的上下文 | 超限时由 `HistoryTrimmer` 按整 Turn 裁剪，并保持 assistant 工具调用与 tool 结果配对 |
 | `--token-budget`（CLI） / `token_budget`（HTTP） | 整个 Turn 的累计 token | 与上下文窗口相互独立；达到预算后 Turn 以预算错误结束 |
 | `--max-iterations` | ReAct 迭代次数 | CLI 与 HTTP 都限制在 1–500，默认 20 |
-| `--cost-budget`（仅 CLI） | 估算成本 | 需要同时配置输入/输出费率才有意义 |
+| `--cost-budget`（仅 CLI） | Turn 的成本预算字段 | 当前只随 Turn 记录，运行循环**不做**成本上限拦截；成本估算仍取决于下面的费率 |
 | `BALE_INPUT_COST_PER_1K` + `BALE_OUTPUT_COST_PER_1K` | 成本估算 | 只填一项时 `estimated_cost` 保持 `null` |
 
 Token 数与成本都是确定性估算，不等于 Provider 账单。默认 Fake Provider 的用量为 0。
@@ -108,7 +108,7 @@ bale run --workspace "$PWD" --message "写一条 MCP 笔记" \
   --mcp-config examples/mcp/servers.json --yes
 ```
 
-- `--mcp-config` 优先于 `BALE_MCP_CONFIG`（CLI 只读取显式参数）。
+- CLI 只读取显式的 `--mcp-config`；`BALE_MCP_CONFIG` 仅用于 HTTP 应用启动时加载。
 - `bale chat` 在整个 REPL 期间复用同一 MCP 会话。
 - 服务器配置支持 `name`、`command`、`args`、`env`、`cwd`、`read_only`、`timeout_ms`；相对 `cwd` 以配置文件所在目录为基准。
 - 只支持 stdio transport；`read_only` 是调用方声明，不是隔离保证。
