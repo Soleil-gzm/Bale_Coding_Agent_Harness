@@ -1,0 +1,28 @@
+{
+  "tasks": [
+    {
+      "id": "greeting-message",
+      "description": "Change the greeting text while keeping the function signature.",
+      "fixture": "fixtures/greeting",
+      "message": "In greetings.py, update greet() so it returns a message starting with 'hello'. Keep the name parameter and return a string.",
+      "max_iterations": 6,
+      "checks": [
+        {"type": "file_exists", "path": "greetings.py"},
+        {"type": "file_contains", "path": "greetings.py", "value": "hello"},
+        {"type": "file_not_contains", "path": "greetings.py", "value": "hi,"}
+      ]
+    },
+    {
+      "id": "disable-debug",
+      "description": "Disable a debug flag without touching unrelated settings.",
+      "fixture": "fixtures/config",
+      "message": "In settings.py, set DEBUG to False. Do not change TIMEOUT_SECONDS.",
+      "max_iterations": 6,
+      "checks": [
+        {"type": "file_contains", "path": "settings.py", "value": "DEBUG = False"},
+        {"type": "file_not_contains", "path": "settings.py", "value": "DEBUG = True"},
+        {"type": "file_contains", "path": "settings.py", "value": "TIMEOUT_SECONDS = 30"}
+      ]
+    }
+  ]
+}

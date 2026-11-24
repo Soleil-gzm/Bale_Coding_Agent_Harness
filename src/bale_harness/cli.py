@@ -15,10 +15,20 @@ from bale_harness.agent.cost import CostRates
 from bale_harness.agent.loop import AgentLoop, RunResult, build_default_loop
 from bale_harness.agent.messages import ToolCall, ToolSpec
 from bale_harness.agent.report import build_report
+from bale_harness.agent.security import WorkspaceError, WorkspaceGuard
 from bale_harness.agent.session import SessionStore, TurnRecord
+from bale_harness.agent.tools.code_search import (
+    DEFAULT_LIMIT,
+    MAX_LIMIT,
+    format_hits,
+)
 from bale_harness.agent.trace import JsonlTraceExporter, read_trace
 from bale_harness.contracts import ApprovalMode, Turn
+from bale_harness.eval.report import render_markdown
+from bale_harness.eval.runner import EvalReport, run_tasks
+from bale_harness.eval.task import EvalTaskError, load_tasks, resolve_task_file
 from bale_harness.providers import create_provider
+from bale_harness.repo_index import Bm25Index
 from bale_harness.settings import Settings
 from bale_harness.turns import TurnRequest, build_turn
 
@@ -140,6 +150,125 @@ def turn_command(
         approval_mode=approval_mode,
     )
     typer.echo(build_turn(request).model_dump_json())
+
+
+@app.command("search")
+def search_command(
+    workspace: Annotated[
+        Path,
+        typer.Option(
+            ...,
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            readable=True,
+            resolve_path=True,
+            help="Workspace directory to index and search",
+        ),
+    ],
+    query: Annotated[str, typer.Option(..., help="Query text or identifiers")],
+    limit: Annotated[
+        int, typer.Option(min=1, max=MAX_LIMIT, help="Maximum number of hits")
+    ] = DEFAULT_LIMIT,
+    path: Annotated[
+        str, typer.Option(help="Subdirectory to search, relative to the workspace")
+    ] = ".",
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Print hits as JSON")
+    ] = False,
+) -> None:
+    """Rank workspace code chunks with a BM25 lexical index."""
+    guard = WorkspaceGuard(workspace)
+    try:
+        root = guard.resolve(path)
+    except WorkspaceError as error:
+        raise typer.BadParameter(f"path escapes workspace: {path}") from error
+    if not root.exists():
+        raise typer.BadParameter(f"path not found: {path}")
+    if not root.is_dir():
+        raise typer.BadParameter(f"not a directory: {path}")
+
+    index = Bm25Index.from_directory(root)
+    hits = index.search(query, limit)
+    if json_output:
+        typer.echo(
+            json.dumps(
+                {
+                    "query": query,
+                    "path": path,
+                    "indexed_files": index.file_count,
+                    "indexed_chunks": index.chunk_count,
+                    "hits": [
+                        {
+                            "path": hit.path,
+                            "start_line": hit.start_line,
+                            "end_line": hit.end_line,
+                            "score": hit.score,
+                            "snippet": hit.snippet,
+                        }
+                        for hit in hits
+                    ],
+                },
+                ensure_ascii=False,
+            )
+        )
+        return
+    if not hits:
+        typer.echo(f"no matches for {query.strip()!r}")
+        return
+    typer.echo(format_hits(hits))
+
+
+@app.command("eval")
+def eval_command(
+    tasks: Annotated[
+        Path,
+        typer.Option(
+            ...,
+            exists=True,
+            readable=True,
+            help="JSON task file or directory containing tasks.json",
+        ),
+    ],
+    output: Annotated[
+        Path | None, typer.Option(help="Write the Markdown report to this file")
+    ] = None,
+    json_output: Annotated[
+        Path | None, typer.Option("--json", help="Write the JSON report to this file")
+    ] = None,
+) -> None:
+    """Run fixed evaluation tasks on fixture copies and verify their checks."""
+    try:
+        task_list = load_tasks(tasks)
+    except EvalTaskError as error:
+        raise typer.BadParameter(str(error)) from error
+    task_file = resolve_task_file(tasks)
+    if not task_list:
+        raise typer.BadParameter(f"no tasks in {task_file}")
+
+    settings = Settings()
+    report: EvalReport = asyncio.run(
+        run_tasks(
+            task_list,
+            task_file.parent,
+            lambda _task: create_provider(settings),
+        )
+    )
+    markdown = render_markdown(report)
+    if output is None:
+        typer.echo(markdown)
+    else:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(markdown, encoding="utf-8")
+    if json_output is not None:
+        json_output.parent.mkdir(parents=True, exist_ok=True)
+        json_output.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+    typer.echo(
+        f"passed {report.passed}/{report.total} "
+        f"(failed {report.failed}, errors {report.errors})"
+    )
+    if not report.ok:
+        raise typer.Exit(code=1)
 
 
 @app.command("run")
