@@ -2,7 +2,7 @@
 
 Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目标是将模型交互、工具治理、上下文管理、隔离执行、状态恢复和执行证据组织为可扩展的薄内核。
 
-**当前仓库处于早期建设阶段。** 已落地 B0 工程基础、B1 只读 ReAct 运行时和 B2a 写入运行时：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider、只创建 Turn 的 CLI/HTTP 入口，以及带审批、ShadowGit 快照和本地 Sandbox 的 `bale run`。真实 OpenAIProvider、Docker 容器隔离、Session/Resume 与 Trace 仍未实现。
+**当前仓库处于早期建设阶段。** 已落地 B0 工程基础、B1 只读 ReAct 运行时、B2a 写入运行时和 B3 上下文/会话运行时：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider、只创建 Turn 的 CLI/HTTP 入口，带审批、ShadowGit 快照和本地 Sandbox 的 `bale run`，以及 Token 预算、历史裁剪、SQLite Session 与取消恢复。真实 OpenAIProvider、Docker 容器隔离与 Trace 仍未实现。
 
 ## 当前功能
 
@@ -24,13 +24,21 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - `ShadowGit` 使用独立 git-dir 做基线与逐迭代快照，输出相对基线的 Diff，不读写工作区自己的 `.git`。
 - `bale run` 驱动上述闭环，输出包含 `diff` 与 `checkpoints` 的 `RunResult` JSON。
 
+### 上下文、会话与恢复
+
+- `ContextBuilder` 生成 Turn 内稳定的系统前缀，并可注入上一条 completed Turn 的记忆摘要。
+- `TokenBudget` 与 `HistoryTrimmer` 按整 Turn 裁剪历史，压缩超长工具输出，同时保持 assistant 工具调用与 tool 结果配对。
+- `SessionStore` 使用标准库 SQLite 追加保存消息、Turn 状态、已执行调用和 `after_turn` 记忆；`bale run --session-db ... --session-id ...` 启用持久化。
+- 取消或中断后，`bale run --resume` 复用原始 user 消息继续执行；已提交的写操作不会重复执行，结果未知的调用会以 `outcome_unknown` 回注模型。
+- `BALE_CONTEXT_WINDOW` 控制上下文窗口（默认 128000）；`turn.token_budget` 控制本 Turn 累计 token 上限。
+
 ### MCP 文件写入示例
 
 - 使用 `FastMCP` 创建名为 `WriteServer` 的 MCP 服务，通过标准输入输出通信。
 - 注册异步 `write_file(content: str)` 工具，将内容以 UTF-8 写入 `output/note_<时间戳>.txt`。
 - 返回写入结果或错误文本，便于验证 MCP list/call 流程。
 
-当前功能不需要模型 API、数据库、Docker 或 GPU；ShadowGit 快照需要本机可用的 `git`。
+当前功能不需要模型 API、数据库服务、Docker 或 GPU；Session 使用标准库 `sqlite3`，ShadowGit 快照需要本机可用的 `git`。
 
 ## 功能边界
 
@@ -38,7 +46,9 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 
 - 真实 OpenAIProvider 尚未实现；即使配置了有效 Key，`openai` 模式也会明确报告未实现，不会退回 Fake。
 - 不包含 Docker Sandbox 或不可信代码隔离；`LocalSandbox` 仅适用于受控开发场景。
-- 不包含 Session/Resume、Checkpoint 持久化、Trace、评测、SSE 或 HTTP 执行接口。
+- Session 持久化基于本地 SQLite 文件，不提供多进程协调、远程存储或 HTTP Session 接口。
+- ShadowGit 的 git-dir 仍是进程临时目录，恢复后的 Diff 只覆盖恢复之后的改动。
+- 不包含 Checkpoint 目录持久化、Trace、评测、SSE 或 HTTP 执行接口。
 - 审批只在 CLI 中提供交互确认与 `--yes`，没有 HTTP 审批流。
 - MCP 示例的文件名精度为秒，同一秒内的重复调用可能覆盖同名文件。
 - MCP 输出目录相对于进程当前工作目录，不应将其误认为安全沙箱。
@@ -55,10 +65,11 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 | Provider | Protocol、FakeProvider | 最小异步接口与离线测试实现 |
 | 工具治理 | ToolRegistry、PolicyApprover | 参数校验、审批、幂等、超时与错误归一化 |
 | 本地执行 | LocalSandbox、ShadowGit | 子进程防护层与独立 git-dir 快照 |
+| 上下文与会话 | ContextBuilder、HistoryTrimmer、SessionStore | Token 预算、整 Turn 裁剪与 SQLite 持久化 |
 | 工具协议 | Model Context Protocol | MCP 示例使用 `stdio` transport |
 | SDK | `mcp==1.30.0` | 使用 `mcp.server.fastmcp.FastMCP` |
 | 测试与检查 | pytest、Ruff、pip-tools | 离线测试、静态检查与哈希锁文件 |
-| 存储 | 本地文件系统 | 仅 MCP 示例写入 `output/`，Turn 不持久化 |
+| 存储 | SQLite、本地文件系统 | Session 使用标准库 `sqlite3`；MCP 示例写入 `output/` |
 
 ## 项目结构
 
@@ -74,7 +85,10 @@ Bale_Coding_Agent_Harness/
 │   └── agent/                # ReAct 运行时
 │       ├── messages.py       # 运行时消息与工具契约
 │       ├── security.py       # WorkspaceGuard 路径防护
-│       ├── context.py        # 初始上下文装配
+│       ├── history.py        # Token 估算与整 Turn 裁剪
+│       ├── context.py        # 稳定前缀、预算与记忆装配
+│       ├── session.py        # SQLite Session 与恢复状态
+│       ├── memory.py         # after_turn 记忆摘要
 │       ├── approval.py       # 审批策略
 │       ├── sandbox.py        # Sandbox 端口与 LocalSandbox
 │       ├── checkpoint.py     # ShadowGit 快照
@@ -117,6 +131,28 @@ bale turn --message "Inspect the repository" --workspace "$PWD" --token-budget 4
 
 ```bash
 bale run --message "Inspect the repository" --workspace "$PWD" --yes
+```
+
+启用 SQLite Session 并记录会话 ID：
+
+```bash
+bale run \
+  --message "Add a docstring to app.py" \
+  --workspace "$PWD" \
+  --session-db "$PWD/.bale/sessions.db" \
+  --session-id 6f1c1f6e-2e0e-4d0e-9d1e-2f7f1a9b8c11 \
+  --yes
+```
+
+恢复该 Session 中最近的未完成 Turn（不需要再传 `--message`）：
+
+```bash
+bale run \
+  --workspace "$PWD" \
+  --session-db "$PWD/.bale/sessions.db" \
+  --session-id 6f1c1f6e-2e0e-4d0e-9d1e-2f7f1a9b8c11 \
+  --resume \
+  --yes
 ```
 
 启动只提供 Turn 创建接口的 HTTP 应用：

@@ -1,6 +1,6 @@
 # Bale Coding Agent Harness 快速启动指南
 
-本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时、B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、审批与 ShadowGit）和 FastMCP 文件写入示例。真实 OpenAIProvider 与 Docker 容器隔离尚未实现；B2a 的本地执行只适用于受控开发场景。默认 Fake 配置不需要模型、数据库或容器服务。
+本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时、B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、审批与 ShadowGit）、B3 上下文与会话运行时（Token 预算、历史裁剪、SQLite Session、取消恢复）和 FastMCP 文件写入示例。真实 OpenAIProvider 与 Docker 容器隔离尚未实现；B2a 的本地执行只适用于受控开发场景。默认 Fake 配置不需要模型、数据库服务或容器服务。
 
 ## 1. 环境要求
 
@@ -64,6 +64,7 @@ cp .env.example .env
 |---|---|
 | `BALE_PROVIDER` | `fake` 或 `openai`，默认 `fake` |
 | `BALE_OPENAI_API_KEY` | `openai` 模式必填，空白值视为缺失，使用 SecretStr 保护 |
+| `BALE_CONTEXT_WINDOW` | 上下文窗口 token 数，默认 `128000`；与 `turn.token_budget` 独立 |
 
 `openai` 模式缺少有效 Key 时会在初始化阶段失败。即使 Key 有效，Provider 工厂也会报告真实 OpenAIProvider 尚未实现，不会静默退回 Fake。`.env` 已被 Git 忽略，不要提交真实密钥或打印完整 Settings。
 
@@ -100,7 +101,9 @@ bale run --message "Inspect the repository" --workspace "$PWD"
   "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
   "error": null,
   "diff": "",
-  "checkpoints": []
+  "checkpoints": [],
+  "session_id": null,
+  "resumed": false
 }
 ```
 
@@ -122,6 +125,39 @@ bale run \
 - `--shadow-git/--no-shadow-git`（默认开启）：在系统临时目录建立独立 git-dir，为每次迭代创建快照，并把相对基线的 Diff 写入结果的 `diff` 字段；不会读写工作区自己的 `.git`。
 - `shell` 不接受管道、重定向或串联等 shell 元字符，推荐直接传参数数组。`run_tests` 使用当前 Python 解释器执行 pytest。
 - `LocalSandbox` 只是受控开发环境的防护层，提供命令 deny-list、环境变量白名单、cwd 限定、超时和输出截断，**不是**不可信代码的安全边界；容器隔离属于后续里程碑。
+
+### 4.3 会话持久化与恢复
+
+B3 增加了基于标准库 `sqlite3` 的 Session。传入 `--session-db` 后，消息、Turn 状态、已执行调用和 `after_turn` 记忆都会写入该文件；`--session-id` 用于显式指定会话：
+
+```bash
+bale run \
+  --message "Add a docstring to app.py" \
+  --workspace "$PWD" \
+  --session-db "$PWD/.bale/sessions.db" \
+  --session-id 6f1c1f6e-2e0e-4d0e-9d1e-2f7f1a9b8c11 \
+  --yes
+```
+
+如果进程在 Turn 完成前退出（例如 Ctrl+C），该 Turn 会保持 `running` 或写入为 `cancelled`，可以恢复最近一个未完成 Turn。`--resume` 会复用存储的原始 user 消息，不需要也不允许同时传 `--message`：
+
+```bash
+bale run \
+  --workspace "$PWD" \
+  --session-db "$PWD/.bale/sessions.db" \
+  --session-id 6f1c1f6e-2e0e-4d0e-9d1e-2f7f1a9b8c11 \
+  --resume \
+  --yes
+```
+
+恢复语义：
+
+- Session 的 workspace 必须与 `--workspace` 一致，否则拒绝恢复。
+- 已提交的写/执行调用会从数据库播种到幂等缓存，不会重复执行。
+- 执行前已记录 `pending`、但没有结果的调用不会被重放，而是合成 `outcome_unknown` 的 tool 消息回注模型。
+- 每个 Turn 完成（`completed`）后写入一条有界记忆摘要；下个 Turn 的稳定系统前缀会包含最近 5 条。
+- Token 预算分两层：`turn.token_budget`（累计 `total_tokens` 上限）与 `BALE_CONTEXT_WINDOW`（上下文窗口裁剪）。Token 数为确定性估算，不等于 Provider 计费值。
+- ShadowGit 的 git-dir 仍使用进程临时目录，恢复后的 `diff` 只覆盖恢复后的改动。
 
 ## 5. 使用 HTTP 创建 Turn
 
@@ -309,7 +345,7 @@ pytest -q
 python -m compileall examples
 ```
 
-测试覆盖契约、配置、FakeProvider、CLI/HTTP 同构、HTTP 输入校验、B1 只读运行时（消息契约、路径防护、工具注册器、只读工具、ReAct 循环、CLI run）、B2a 写入运行时（审批策略、Sandbox 防护、ShadowGit、写入/编辑、执行工具、幂等与端到端改码闭环）和 MCP 示例语法，不需要网络或 API Key。部分测试会在临时目录启动真实 pytest 子进程。仓库已配置 GitHub Actions，但远程结果应以 Actions 页面为准。
+测试覆盖契约、配置、FakeProvider、CLI/HTTP 同构、HTTP 输入校验、B1 只读运行时（消息契约、路径防护、工具注册器、只读工具、ReAct 循环、CLI run）、B2a 写入运行时（审批策略、Sandbox 防护、ShadowGit、写入/编辑、执行工具、幂等与端到端改码闭环）、B3 上下文与会话（预算非负、整 Turn 裁剪与配对、稳定前缀、SQLite 往返与事务回滚、记忆、取消恢复与不重复写入）和 MCP 示例语法，不需要网络或 API Key。部分测试会在临时目录启动真实 pytest 子进程。仓库已配置 GitHub Actions，但远程结果应以 Actions 页面为准。
 
 修改 MCP 示例后，重新执行第 7 节脚本，确认：
 
