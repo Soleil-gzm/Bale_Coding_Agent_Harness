@@ -201,7 +201,12 @@ class RunTestsTool(BaseTool):
         ]
 
         try:
-            result = await self._sandbox.run(argv, timeout_s=timeout_s)
+            result = await self._sandbox.run(
+                argv,
+                timeout_s=timeout_s,
+                # Keep the workspace clean: no __pycache__ from test imports.
+                extra_env={"PYTHONDONTWRITEBYTECODE": "1"},
+            )
         except SandboxViolation as exc:
             return error("run_tests", str(exc), "sandbox_violation", start)
 
