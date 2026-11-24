@@ -1,18 +1,19 @@
 """Tool protocol, registry, and execution governance.
 
 Every tool call goes through :class:`ToolRegistry`, which centralizes argument
-validation, per-tool timeout, error normalization, call-id propagation, and the
-decision of whether a batch of calls may run concurrently.
+validation, approval, call-id idempotency, per-tool timeout, error
+normalization, and the decision of whether a batch of calls may run
+concurrently.
 
-B1 registers read-only tools only. Write/execute tools are rejected at
-registration time with a clear error; human approval and write scheduling are
-planned for a later milestone.
+Read tools are safe and run without approval. Tools with side effects require
+an :class:`~bale_harness.agent.approval.Approver`; without one they are denied.
 """
 
 import asyncio
 import time
 from typing import Any, Protocol
 
+from bale_harness.agent.approval import Approver
 from bale_harness.agent.messages import ToolCall, ToolSpec
 from bale_harness.contracts import ToolResult
 
@@ -45,18 +46,15 @@ def _elapsed_ms(start: float) -> int:
 class ToolRegistry:
     """Register tools and dispatch calls with governance applied."""
 
-    def __init__(self) -> None:
+    def __init__(self, approver: Approver | None = None) -> None:
         self._tools: dict[str, Tool] = {}
+        self._approver = approver
+        self._executed: dict[str, ToolResult] = {}
 
     def register(self, tool: Tool) -> None:
         name = tool.spec.name
         if name in self._tools:
             raise ValueError(f"tool already registered: {name}")
-        if tool.spec.side_effect != "read":
-            raise ValueError(
-                f"only read-only tools are supported in B1; "
-                f"{name!r} has side_effect {tool.spec.side_effect!r}"
-            )
         self._tools[name] = tool
 
     def list_specs(self) -> list[ToolSpec]:
@@ -90,6 +88,22 @@ class ToolRegistry:
                 latency_ms=_elapsed_ms(start),
             )
 
+        has_side_effects = tool.spec.side_effect != "read"
+        if has_side_effects:
+            cached = self._executed.get(call.call_id)
+            if cached is not None and cached.name == call.name:
+                return cached
+
+            if not await self._is_approved(call, tool.spec):
+                return ToolResult(
+                    call_id=call.call_id,
+                    name=call.name,
+                    status="denied",
+                    content=f"approval denied: {call.name}",
+                    error_code="denied",
+                    latency_ms=_elapsed_ms(start),
+                )
+
         timeout_s = tool.spec.timeout_ms / 1000
         try:
             result = await asyncio.wait_for(
@@ -116,7 +130,17 @@ class ToolRegistry:
 
         if result.call_id != call.call_id:
             result = result.model_copy(update={"call_id": call.call_id})
+        if has_side_effects:
+            self._executed[call.call_id] = result
         return result
+
+    async def _is_approved(self, call: ToolCall, spec: ToolSpec) -> bool:
+        if self._approver is None:
+            return False
+        try:
+            return bool(await self._approver.approve(call, spec))
+        except Exception:  # fail safe: an approval error means "deny"
+            return False
 
     def _all_safe_for_parallel(self, calls: list[ToolCall]) -> bool:
         for call in calls:

@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from bale_harness.agent.approval import PolicyApprover, auto_approve
 from bale_harness.agent.messages import ToolCall, ToolSpec
 from bale_harness.agent.tools.registry import BaseTool, ToolRegistry
 from bale_harness.contracts import ToolResult
@@ -84,8 +85,23 @@ class WriteTool(BaseTool):
         side_effect="write",
     )
 
+    def __init__(self) -> None:
+        self.executions = 0
+
     async def execute(self, arguments: dict[str, Any]) -> ToolResult:
-        raise NotImplementedError
+        self.executions += 1
+        return ToolResult(
+            call_id="",
+            name="write_file",
+            status="success",
+            content="written",
+            latency_ms=0,
+        )
+
+
+class ExplodingApprover:
+    async def approve(self, call: ToolCall, spec: ToolSpec) -> bool:
+        raise RuntimeError("approval backend down")
 
 
 def _run(coro: Any) -> Any:
@@ -107,11 +123,75 @@ def test_register_duplicate_name_raises() -> None:
         registry.register(EchoTool())
 
 
-def test_register_write_tool_is_rejected() -> None:
+def test_register_write_tool_is_allowed() -> None:
     registry = ToolRegistry()
 
-    with pytest.raises(ValueError, match="read-only"):
-        registry.register(WriteTool())
+    registry.register(WriteTool())
+
+    assert [spec.name for spec in registry.list_specs()] == ["write_file"]
+
+
+def test_write_tool_is_denied_without_approver() -> None:
+    registry = ToolRegistry()
+    registry.register(WriteTool())
+
+    result = _run(
+        registry.execute(ToolCall(call_id="w1", name="write_file", arguments={}))
+    )
+
+    assert result.status == "denied"
+    assert result.error_code == "denied"
+    assert result.call_id == "w1"
+
+
+def test_write_tool_runs_when_approved() -> None:
+    tool = WriteTool()
+    registry = ToolRegistry(PolicyApprover("approve_write", auto_approve))
+    registry.register(tool)
+
+    result = _run(
+        registry.execute(ToolCall(call_id="w1", name="write_file", arguments={}))
+    )
+
+    assert result.status == "success"
+    assert tool.executions == 1
+
+
+def test_side_effect_call_is_idempotent_by_call_id() -> None:
+    tool = WriteTool()
+    registry = ToolRegistry(PolicyApprover("approve_write", auto_approve))
+    registry.register(tool)
+    call = ToolCall(call_id="w1", name="write_file", arguments={})
+
+    first = _run(registry.execute(call))
+    second = _run(registry.execute(call))
+
+    assert first.status == "success"
+    assert second.status == "success"
+    assert tool.executions == 1
+
+
+def test_read_tool_skips_approval_even_without_approver() -> None:
+    registry = ToolRegistry(PolicyApprover("auto_read"))
+    registry.register(EchoTool())
+
+    result = _run(
+        registry.execute(ToolCall(call_id="c1", name="echo", arguments={"text": "hi"}))
+    )
+
+    assert result.status == "success"
+
+
+def test_approver_failure_denies_call() -> None:
+    registry = ToolRegistry(ExplodingApprover())
+    registry.register(WriteTool())
+
+    result = _run(
+        registry.execute(ToolCall(call_id="w1", name="write_file", arguments={}))
+    )
+
+    assert result.status == "denied"
+    assert result.error_code == "denied"
 
 
 def test_execute_success_propagates_call_id() -> None:
