@@ -14,6 +14,7 @@ persisted so an interrupted turn can be resumed without repeating side effects.
 
 import asyncio
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -42,7 +43,7 @@ from bale_harness.agent.session import SessionError, SessionStore, TurnRecord
 from bale_harness.agent.tools import build_default_tools
 from bale_harness.agent.tools.exec import build_exec_tools
 from bale_harness.agent.tools.git import build_git_tools
-from bale_harness.agent.tools.registry import ToolRegistry
+from bale_harness.agent.tools.registry import Tool, ToolRegistry
 from bale_harness.agent.tools.write import build_write_tools
 from bale_harness.agent.trace import TraceExporter
 from bale_harness.contracts import ApprovalMode, Turn
@@ -650,20 +651,24 @@ def build_default_loop(
     context_window: int = DEFAULT_CONTEXT_WINDOW,
     tracer: TraceExporter | None = None,
     cost_rates: CostRates | None = None,
+    extra_tools: Sequence[Tool] | None = None,
 ) -> AgentLoop:
     """Construct a loop wired to the workspace tools.
 
     Read tools run freely. Write and execute tools require ``approver`` to
-    approve each call; without one they are denied.
+    approve each call; without one they are denied. ``extra_tools`` (for
+    example MCP adapters) are registered after the built-ins and follow the
+    same governance.
     """
     guard = WorkspaceGuard(workspace)
     registry = ToolRegistry(PolicyApprover(approval_mode, approver))
-    tools = [
+    tools: list[Tool] = [
         *build_default_tools(guard),
         *build_write_tools(guard),
         *build_exec_tools(sandbox or LocalSandbox(guard)),
         *build_git_tools(checkpoint),
     ]
+    tools.extend(extra_tools or [])
     for tool in tools:
         registry.register(tool)
     return AgentLoop(

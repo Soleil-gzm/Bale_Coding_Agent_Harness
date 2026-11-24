@@ -22,6 +22,12 @@ from bale_harness.agent.tools.code_search import (
     MAX_LIMIT,
     format_hits,
 )
+from bale_harness.agent.tools.mcp import (
+    McpConfigError,
+    McpServerConfig,
+    load_mcp_config,
+    mcp_tools,
+)
 from bale_harness.agent.trace import JsonlTraceExporter, read_trace
 from bale_harness.contracts import ApprovalMode, Turn
 from bale_harness.eval.report import render_markdown
@@ -326,6 +332,17 @@ def run_command(
         Path | None,
         typer.Option(help="Persistent shadow git directory (outside the workspace)"),
     ] = None,
+    mcp_config: Annotated[
+        Path | None,
+        typer.Option(
+            "--mcp-config",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="JSON file describing stdio MCP servers",
+        ),
+    ] = None,
 ) -> None:
     """Execute a ReAct run against the workspace."""
     if sandbox != "local":
@@ -346,6 +363,12 @@ def run_command(
 
     settings = Settings()
     provider = create_provider(settings)
+    mcp_servers: list[McpServerConfig] = []
+    if mcp_config is not None:
+        try:
+            mcp_servers = load_mcp_config(mcp_config)
+        except McpConfigError as error:
+            raise typer.BadParameter(str(error)) from error
     checkpoint: ShadowGit | None = None
     if shadow_git:
         if checkpoint_dir is not None or session_db is not None:
@@ -362,17 +385,6 @@ def run_command(
     session = SessionStore(session_db) if session_db is not None else None
     trace_path = trace or settings.trace_path
     tracer = JsonlTraceExporter(trace_path) if trace_path else None
-    loop = build_default_loop(
-        provider,
-        workspace,
-        approval_mode=approval_mode,
-        approver=approver,
-        checkpoint=checkpoint,
-        session=session,
-        context_window=settings.context_window,
-        tracer=tracer,
-        cost_rates=_cost_rates(settings),
-    )
 
     if resume:
         assert session is not None
@@ -396,7 +408,23 @@ def run_command(
             approval_mode=approval_mode,
         )
 
-    result: RunResult = asyncio.run(_execute(loop, turn, checkpoint, resume=resume))
+    async def _run_with_tools() -> RunResult:
+        async with mcp_tools(mcp_servers) as extra_tools:
+            loop = build_default_loop(
+                provider,
+                workspace,
+                approval_mode=approval_mode,
+                approver=approver,
+                checkpoint=checkpoint,
+                session=session,
+                context_window=settings.context_window,
+                tracer=tracer,
+                cost_rates=_cost_rates(settings),
+                extra_tools=extra_tools,
+            )
+            return await _execute(loop, turn, checkpoint, resume=resume)
+
+    result: RunResult = asyncio.run(_run_with_tools())
     typer.echo(result.model_dump_json())
     raise typer.Exit(code=0 if result.status == "completed" else 1)
 
