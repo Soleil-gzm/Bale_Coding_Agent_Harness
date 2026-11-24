@@ -11,8 +11,9 @@ from bale_harness.agent.checkpoint import ShadowGit
 from bale_harness.agent.cost import CostRates
 from bale_harness.agent.loop import AgentLoop, RunResult, build_default_loop
 from bale_harness.agent.messages import ToolCall, ToolSpec
+from bale_harness.agent.report import build_report
 from bale_harness.agent.session import SessionStore, TurnRecord
-from bale_harness.agent.trace import JsonlTraceExporter
+from bale_harness.agent.trace import JsonlTraceExporter, read_trace
 from bale_harness.contracts import ApprovalMode, Turn
 from bale_harness.providers import create_provider
 from bale_harness.settings import Settings
@@ -55,6 +56,23 @@ def _cost_rates(settings: Settings) -> CostRates | None:
     return CostRates(
         input_per_1k=settings.input_cost_per_1k,
         output_per_1k=settings.output_cost_per_1k,
+    )
+
+
+async def _collect_report(
+    store: SessionStore, session_id: UUID, trace_path: str | None
+) -> str | None:
+    turns = await store.list_turns(session_id)
+    if not turns:
+        return None
+    executed = {turn.turn_id: await store.load_executed(turn.turn_id) for turn in turns}
+    return build_report(
+        session_id=session_id,
+        workspace=turns[0].workspace,
+        turns=turns,
+        executed=executed,
+        trace=read_trace(trace_path) if trace_path else [],
+        memory=await store.load_memory(session_id),
     )
 
 
@@ -202,3 +220,50 @@ def run_command(
     result: RunResult = asyncio.run(_execute(loop, turn, checkpoint, resume=resume))
     typer.echo(result.model_dump_json())
     raise typer.Exit(code=0 if result.status == "completed" else 1)
+
+
+@app.command("report")
+def report_command(
+    session_db: Annotated[
+        Path,
+        typer.Option(
+            ...,
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="SQLite database with persisted session state",
+        ),
+    ],
+    session_id: Annotated[str, typer.Option(help="Session identifier (UUID)")],
+    trace: Annotated[
+        Path | None, typer.Option(help="JSONL trace file to summarize")
+    ] = None,
+    output: Annotated[
+        Path | None, typer.Option(help="Write the Markdown report to this file")
+    ] = None,
+) -> None:
+    """Render a Markdown report for a persisted session."""
+    try:
+        parsed_session_id = UUID(session_id)
+    except ValueError as error:
+        raise typer.BadParameter(f"invalid session id: {session_id}") from error
+    if trace is not None and not trace.exists():
+        raise typer.BadParameter(f"trace file not found: {trace}")
+
+    markdown = asyncio.run(
+        _collect_report(
+            SessionStore(session_db),
+            parsed_session_id,
+            str(trace) if trace is not None else None,
+        )
+    )
+    if markdown is None:
+        raise typer.BadParameter(f"no turns for session {parsed_session_id}")
+
+    if output is None:
+        typer.echo(markdown)
+        return
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(markdown, encoding="utf-8")
+    typer.echo(f"wrote {output}")
