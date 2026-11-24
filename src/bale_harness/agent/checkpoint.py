@@ -146,7 +146,12 @@ class ShadowGit:
         return stdout.strip()
 
     async def init(self) -> str:
-        """Create the shadow repository and commit the baseline snapshot."""
+        """Create the shadow repository and commit the baseline snapshot.
+
+        When ``git_dir`` already contains commits, the existing HEAD becomes
+        the baseline instead of committing the current workspace state. This
+        keeps the diff complete across process restarts and resumes.
+        """
         if self._initialized:
             if self._baseline is None:
                 raise ShadowGitError("shadow repository has no baseline")
@@ -162,6 +167,11 @@ class ShadowGit:
         await self._write_excludes()
         await self._git("config", "user.name", "Bale")
         await self._git("config", "user.email", "bale@local")
+        code, head, _ = await self._git("rev-parse", "--verify", "HEAD", check=False)
+        if code == 0 and head.strip():
+            self._baseline = head.strip()
+            self._initialized = True
+            return self._baseline
         await self._git("add", "-A", "--", ".")
         self._baseline = await self._commit("bale: baseline")
         self._initialized = True

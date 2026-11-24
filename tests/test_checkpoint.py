@@ -109,3 +109,28 @@ def test_git_dir_inside_workspace_is_rejected(tmp_path: Path) -> None:
 def test_snapshot_before_init_raises(tmp_path: Path) -> None:
     with pytest.raises(ShadowGitError, match="not been initialized"):
         _run(ShadowGit(tmp_path).snapshot("early"))
+
+
+def test_reused_git_dir_keeps_original_baseline(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.txt").write_bytes(b"one\n")
+    git_dir = tmp_path / "shadow"
+
+    async def first_run() -> str:
+        shadow = ShadowGit(workspace, git_dir)
+        return await shadow.init()
+
+    baseline = _run(first_run())
+    (workspace / "a.txt").write_bytes(b"two\n")
+
+    async def second_run() -> tuple[str, str]:
+        shadow = ShadowGit(workspace, git_dir)
+        reused = await shadow.init()
+        return reused, await shadow.diff()
+
+    reused, diff = _run(second_run())
+
+    assert reused == baseline
+    assert "-one" in diff
+    assert "+two" in diff
