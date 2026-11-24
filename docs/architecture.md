@@ -4,7 +4,7 @@
 
 本文同时记录两类内容：
 
-- **当前实现**：B0 工程骨架、Turn/ToolResult 契约、Settings、ModelProvider/FakeProvider、共享 Turn 构造入口，以及可独立运行的 FastMCP 文件写入示例。
+- **当前实现**：B0 工程骨架、Turn/ToolResult 契约、Settings、ModelProvider/FakeProvider、共享 Turn 构造入口；B1 只读 ReAct 运行时（AgentLoop、ToolRegistry、只读内置工具、Workspace 路径防护与 `bale run` 入口）；以及可独立运行的 FastMCP 文件写入示例。
 - **目标架构**：Coding Agent Harness 的后续设计方向，用于约束模块边界和扩展方式。
 
 除特别注明外，带有“规划”“目标”或“后续”标识的模块均未在当前仓库实现。文档中的目标接口是逻辑契约，不代表已有 Python 类或稳定 API。
@@ -31,7 +31,7 @@
 
 ### 2.2 当前非目标
 
-当前实现不提供 Turn 执行、真实模型调用、自动代码修改、通用命令执行、多模型路由、多智能体调度、Web 前端、权限系统、持久化或生产级隔离。后续实现也应避免在缺少证据时将这些能力视为已经具备。
+当前实现不提供真实模型调用、写入/编辑工具、Shell 与测试执行、多模型路由、多智能体调度、Web 前端、权限系统、持久化或生产级隔离。B1 已提供只读 Turn 执行；后续实现也应避免在缺少证据时将上述未实现能力视为已经具备。
 
 ## 3. 当前实现架构
 
@@ -59,7 +59,35 @@ flowchart LR
 
 CLI 和 HTTP 对相同输入生成相同的非 ID 字段；`turn_id` 和 `session_id` 分别随机生成。HTTP 环境在调用 `create_app()` 时加载，导入模块本身不读取环境。
 
-### 3.2 MCP 分层视图
+### 3.2 B1 只读运行时
+
+B1 在 B0 契约之上实现了最小只读 ReAct 闭环：模型请求工具调用 → 注册表治理执行 → 结果回注上下文 → 无工具调用时结束。当前仅注册只读工具，写入、Shell 与测试执行工具留待后续里程碑。
+
+```mermaid
+flowchart LR
+    CLI[bale run] --> Loop[AgentLoop]
+    Loop --> Provider[ModelProvider]
+    Provider -->|ModelResponse| Loop
+    Loop --> Registry[ToolRegistry]
+    Registry --> Guard[WorkspaceGuard]
+    Registry --> Builtin[read-only builtin tools]
+    Builtin --> Guard
+    Loop --> Result[RunResult JSON]
+```
+
+| 当前模块 | 职责 | 边界 |
+|---|---|---|
+| `agent/messages.py` | 运行时消息、工具调用、模型响应、用量与 ToolSpec 数据契约 | 仅描述数据，不执行 |
+| `agent/security.py` | `WorkspaceGuard`：路径规范化、`..` 逃逸与符号链接逃逸防护 | 只读，不创建工作区 |
+| `agent/tools/registry.py` | `Tool` 协议与 `ToolRegistry`：注册、参数校验、超时、错误归一化、只读并发 | B1 仅接受 `side_effect=read` 的工具 |
+| `agent/tools/builtin.py` | `read_file`、`list_files`、`search_files`，输出有界 | 全部只读且并发安全 |
+| `agent/context.py` | 装配系统前缀与当前用户消息 | 历史裁剪与检索装配留待后续 |
+| `agent/loop.py` | ReAct 循环、终止/取消/迭代预算、调用 ID、用量聚合，返回 `RunResult` | 无 Checkpoint、Session 或 Trace 持久化 |
+| `cli.py` `run` | 构造 Turn 并执行只读循环，输出 `RunResult` JSON | 退出码：`completed` 为 0，否则为 1 |
+
+`ModelProvider.complete` 已演进为接收消息列表与工具定义、返回结构化 `ModelResponse`；`FakeProvider` 支持脚本化响应队列，使循环测试完全离线且确定。真实 OpenAI Provider 仍未实现。
+
+### 3.3 MCP 分层视图
 
 ```mermaid
 flowchart LR
@@ -80,7 +108,7 @@ flowchart LR
 
 核心契约位于 `src/bale_harness/`，MCP 示例保持在 `examples/` 且不与运行时模块共享全局配置。当前没有应用执行层或持久化层。
 
-### 3.3 MCP 模块职责
+### 3.4 MCP 模块职责
 
 实现位于 `examples/mcp/write_server.py`：
 
@@ -92,7 +120,7 @@ flowchart LR
 | 时间戳命名 | `note_YYYYMMDD_HHMMSS.txt` | 秒级精度，可能发生同秒覆盖 |
 | 错误处理 | 捕获文件操作异常并返回文本 | 尚未归一化为结构化错误 |
 
-### 3.4 MCP 数据流
+### 3.5 MCP 数据流
 
 ```mermaid
 sequenceDiagram
@@ -184,7 +212,7 @@ flowchart TB
 | `tracing/` | Span、错误、Token、延迟和成本 | 无 Runtime 反向依赖 |
 | `eval/` | 固定任务、确定性验证和报告 | CLI、Workspace、Verifier |
 
-这些路径用于说明后续职责边界，不与当前 `src/bale_harness/` 文件一一对应。后续实现时应以实际代码和测试为准更新本文，不能把规划路径当作已有模块。
+这些路径用于说明职责边界。B1 已实现 `agent/loop.py`、`agent/context.py`（最小前缀）、`agent/tools/registry.py`、`agent/tools/builtin.py`（只读工具）和 `agent/security.py`；其余模块仍为规划，不能当作已有能力。后续实现时应以实际代码和测试为准更新本文。
 
 ## 6. 核心逻辑契约
 
@@ -211,7 +239,7 @@ CLI 与 HTTP 通过唯一的 `build_turn()` 构造 Turn，避免入口行为不�
 - `truncated=False` 和默认独立字典 `metadata`；
 - 未知字段拒绝与 JSON 序列化/反序列化。
 
-后续工具定义还需要名称、JSON Schema、`read | write | execute` 副作用类型、并发安全性、超时和输出限制。这些属于 ToolRegistry 规划，不是当前工具执行能力。目标调度规则是：只有标记为只读且并发安全的工具可以并行执行；写入和执行工具默认串行。
+B1 已实现 `ToolSpec`（名称、描述、parameters、副作用类型、并发安全标志、超时）与 `ToolRegistry`，提供参数校验、超时、错误归一化和只读并发调度；当前仅注册只读工具。写入和执行工具、审批与幂等检查仍为后续规划。调度规则是：只有标记为只读且并发安全的工具可以并行执行；写入和执行工具默认串行。
 
 ### 6.3 SearchHit
 
@@ -289,7 +317,7 @@ available_history = context_window
 
 ## 9. 扩展点设计
 
-当前 `ModelProvider` 仅定义 `async complete(turn: Turn) -> str`，FakeProvider 是该最小契约的离线实现。以下接口方向用于降低后续实现耦合，不代表这些扩展能力已经存在：
+当前 `ModelProvider` 定义为 `async complete(messages, tools) -> ModelResponse`，FakeProvider 是支持脚本化响应队列的离线实现。以下接口方向用于降低后续实现耦合，其中 Tool 与 ModelProvider 已落地，其余不代表已经存在：
 
 | 扩展点 | 调用方 | 实现方应提供的能力 |
 |---|---|---|
@@ -328,7 +356,7 @@ available_history = context_window
 
 ## 11. 测试与验证设计
 
-当前 pytest 覆盖契约、配置、FakeProvider、CLI/HTTP 同构和输入校验；MCP 示例可通过客户端执行初始化、`list_tools` 和 `call_tool`，并检查输出文件内容。基础检查命令为：
+当前 pytest 覆盖契约、配置、FakeProvider、CLI/HTTP 同构、输入校验，以及 B1 的消息契约、路径防护、工具注册器、只读内置工具、ReAct 循环和 CLI run 端到端；MCP 示例可通过客户端执行初始化、`list_tools` 和 `call_tool`，并检查输出文件内容。基础检查命令为：
 
 ```bash
 ruff check src tests

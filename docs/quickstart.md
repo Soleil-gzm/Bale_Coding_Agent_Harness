@@ -1,6 +1,6 @@
 # Bale Coding Agent Harness 快速启动指南
 
-本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口和 FastMCP 文件写入示例。Turn 当前只创建、不执行；真实 OpenAIProvider 和完整 Agent Runtime 尚未实现。默认 Fake 配置不需要模型、数据库或容器服务。
+本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时（`bale run`）和 FastMCP 文件写入示例。B1 已支持只读 Turn 执行；真实 OpenAIProvider、写入工具和完整 Agent Runtime 尚未实现。默认 Fake 配置不需要模型、数据库或容器服务。
 
 ## 1. 环境要求
 
@@ -79,6 +79,30 @@ bale turn \
 命令向标准输出写入一个 Turn JSON。默认生成随机 `turn_id` 和 `session_id`，状态为 `created`，`max_iterations` 为 20，`approval_mode` 为 `approve_write`。可通过 `--repo-revision`、`--max-iterations`、`--cost-budget` 和 `--approval-mode` 覆盖相应输入。
 
 该命令只构造和校验 Turn，不创建 workspace，不调用 `FakeProvider.complete()`，也不执行任何工具。
+
+### 4.1 使用 bale run 执行只读 ReAct
+
+B1 提供 `bale run`，在指定工作区上执行一个只读 ReAct 循环并输出 `RunResult` JSON。默认 Fake Provider 会立即返回完成答案，无需网络或 API Key：
+
+```bash
+bale run --message "Inspect the repository" --workspace "$PWD"
+```
+
+输出示例：
+
+```json
+{
+  "turn_id": "...",
+  "status": "completed",
+  "answer": "Task completed.",
+  "iterations": 1,
+  "tool_calls": 0,
+  "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+  "error": null
+}
+```
+
+退出码：`completed` 为 0，`failed` 或 `cancelled` 为 1。可用 `--max-iterations` 限制循环次数，`--token-budget` 设置预算。当前仅注册只读工具（`read_file`、`list_files`、`search_files`），所有路径都受 `WorkspaceGuard` 防护，无法逃逸工作区。
 
 ## 5. 使用 HTTP 创建 Turn
 
@@ -266,7 +290,7 @@ pytest -q
 python -m compileall examples
 ```
 
-测试覆盖契约、配置、FakeProvider、CLI/HTTP 同构、HTTP 输入校验和 MCP 示例语法，不需要网络或 API Key。仓库已配置 GitHub Actions，但远程结果应以 Actions 页面为准。
+测试覆盖契约、配置、FakeProvider、CLI/HTTP 同构、HTTP 输入校验、B1 只读运行时（消息契约、路径防护、工具注册器、只读工具、ReAct 循环、CLI run）和 MCP 示例语法，不需要网络或 API Key。仓库已配置 GitHub Actions，但远程结果应以 Actions 页面为准。
 
 修改 MCP 示例后，重新执行第 7 节脚本，确认：
 
