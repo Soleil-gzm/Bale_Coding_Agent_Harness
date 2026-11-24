@@ -1,9 +1,8 @@
 import asyncio
 
-import pytest
-
 from bale_harness.agent.messages import ModelResponse, ToolCall
 from bale_harness.providers import FakeProvider, create_provider
+from bale_harness.providers_openai import OpenAICompatibleProvider
 from bale_harness.settings import Settings
 
 
@@ -40,15 +39,19 @@ def test_factory_creates_fake_provider() -> None:
     assert isinstance(create_provider(settings), FakeProvider)
 
 
-def test_factory_does_not_fall_back_to_fake_for_openai() -> None:
+def test_factory_wires_openai_settings_into_the_provider() -> None:
     secret = "sk-test-sensitive-value"
     settings = Settings(
         _env_file=None,
         provider="openai",
         openai_api_key=secret,
+        openai_base_url="https://api.deepseek.com/v1",
+        openai_model="deepseek-chat",
     )
 
-    with pytest.raises(NotImplementedError, match="not implemented") as error:
-        create_provider(settings)
+    provider = create_provider(settings)
 
-    assert secret not in str(error.value)
+    assert isinstance(provider, OpenAICompatibleProvider)
+    assert provider._model == "deepseek-chat"  # noqa: SLF001
+    assert provider._base_url == "https://api.deepseek.com/v1"  # noqa: SLF001
+    assert provider._api_key == secret  # noqa: SLF001

@@ -2,6 +2,7 @@ from collections import deque
 from typing import Protocol
 
 from bale_harness.agent.messages import ChatMessage, ModelResponse, ToolSpec
+from bale_harness.providers_openai import OpenAICompatibleProvider
 from bale_harness.settings import Settings
 
 
@@ -36,6 +37,12 @@ class FakeProvider:
 
 
 def create_provider(settings: Settings) -> ModelProvider:
+    """Build the provider selected by ``BALE_PROVIDER``."""
     if settings.provider == "fake":
         return FakeProvider()
-    raise NotImplementedError("OpenAI provider is not implemented")
+    api_key = settings.openai_api_key
+    return OpenAICompatibleProvider(
+        api_key=api_key.get_secret_value() if api_key is not None else "",
+        model=settings.openai_model,
+        base_url=settings.openai_base_url,
+    )

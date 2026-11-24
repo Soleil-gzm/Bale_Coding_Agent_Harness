@@ -35,6 +35,41 @@ def test_openai_provider_requires_nonblank_api_key(api_key: str | None) -> None:
         Settings(_env_file=None, provider="openai", openai_api_key=api_key)
 
 
+def test_openai_endpoint_defaults_and_reads_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(_env_file=None)
+    assert settings.openai_base_url == "https://api.openai.com/v1"
+    assert settings.openai_model == "gpt-4o-mini"
+
+    monkeypatch.setenv("BALE_OPENAI_BASE_URL", "http://127.0.0.1:11434/v1")
+    monkeypatch.setenv("BALE_OPENAI_MODEL", "qwen2.5-coder:7b")
+
+    settings = Settings(_env_file=None)
+    assert settings.openai_base_url == "http://127.0.0.1:11434/v1"
+    assert settings.openai_model == "qwen2.5-coder:7b"
+
+
+def test_local_openai_endpoint_does_not_require_api_key() -> None:
+    settings = Settings(
+        _env_file=None,
+        provider="openai",
+        openai_base_url="http://localhost:11434/v1",
+        openai_model="qwen2.5-coder:7b",
+    )
+
+    assert settings.openai_api_key is None
+
+
+def test_remote_openai_endpoint_still_requires_api_key() -> None:
+    with pytest.raises(ValidationError, match=OPENAI_KEY_REQUIRED):
+        Settings(
+            _env_file=None,
+            provider="openai",
+            openai_base_url="https://api.deepseek.com/v1",
+        )
+
+
 def test_trace_and_cost_settings_default_to_none() -> None:
     settings = Settings(_env_file=None)
 
