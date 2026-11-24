@@ -75,7 +75,7 @@ cp .env.example .env
 | `BALE_RETRIEVAL_ENABLED` | 是否在每次 Turn 自动注入 BM25 检索片段，默认 `true` |
 | `BALE_RETRIEVAL_TOP_K` | 自动检索片段上限，默认 `5`，范围 1–20 |
 
-远程 `openai` 端点缺少有效 Key 时会在初始化阶段失败；`http://localhost`、`http://127.0.0.1` 等本地端点可免 Key。`.env` 已被 Git 忽略，不要提交真实密钥或打印完整 Settings。
+远程 `openai` 端点缺少有效 Key 时会在初始化阶段失败；`http://localhost`、`http://127.0.0.1` 等本地端点可免 Key。`.env` 已被 Git 忽略，不要提交真实密钥或打印完整 Settings。配置优先级、CLI 参数映射与校验失败见[配置参考](configuration.md)。
 
 常用端点示例：
 
@@ -615,5 +615,10 @@ python -m compileall examples
 
 ## 12. 下一步
 
+- 按目标选择阅读路径：[文档索引](README.md)。
+- 调整环境变量、Provider 或 HTTP/MCP 开关：[配置参考](configuration.md)。
 - 了解当前实现与目标模块的边界：[架构设计](architecture.md)。
+- 部署或评审前确认信任边界：[安全模型](security.md)。
+- 遇到失败先查：[问题排查](troubleshooting.md)。
+- 记录评测结果：[评测指南](evaluation/README.md)。
 - 返回项目功能、结构和贡献说明：[README](../README.md)。

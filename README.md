@@ -4,6 +4,16 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 
 **当前仓库处于早期建设阶段。** 已落地 B0 工程基础、B1 只读 ReAct 运行时、B2a 写入运行时、B3 上下文/会话运行时、B4 追踪/成本运行时、B5 运行报告、B6 本地闭环增强、B7 HTTP 执行/SSE、B8 检索/评测和 B9 MCP 工具接入：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider 与 OpenAI 兼容 Provider、只创建 Turn 的 CLI/HTTP 入口，带审批、ShadowGit 快照和本地 Sandbox 的 `bale run`，Token 预算、历史裁剪、SQLite Session 与取消恢复，JSONL Trace 与可选成本估算，基于 Session/Trace 的 Markdown 报告，持久化 Checkpoint 与 `bale undo`，`bale chat` 多轮交互，`bale session`/`bale trace` 检查命令，`move_file`/`delete_file`/`apply_patch` 写入工具，执行 Turn 的 `POST /v1/runs` 与 SSE 流式 `POST /v1/runs/stream`，以及 BM25 代码检索（`search_code`、`bale search`）、固定任务评测（`bale eval`）和 stdio MCP 工具适配（`bale run --mcp-config`、`bale chat --mcp-config`、HTTP `BALE_MCP_CONFIG`）。HTTP 入口另提供 `/health`、可选 Bearer 认证和按 `run_id` 的协作式取消；Python 文件按顶层定义切块，Agent Loop 会按用户消息自动注入检索片段。Docker 容器隔离、向量检索与 HTTP 审批流仍未实现。
 
+## 文档
+
+- [文档索引](docs/README.md)：按目标选择阅读路径。
+- [快速启动](docs/quickstart.md)：安装、配置、CLI/HTTP/MCP 命令。
+- [配置参考](docs/configuration.md)：配置优先级、环境变量与运行参数。
+- [架构设计](docs/architecture.md)：当前实现、核心契约与演进边界。
+- [问题排查](docs/troubleshooting.md)：安装/运行/HTTP/MCP/检索/评测的常见失败。
+- [安全模型](docs/security.md)：工作区、审批、执行、MCP 与 HTTP 的信任边界。
+- [评测指南](docs/evaluation/README.md)：任务格式、报告字段与证据边界。
+
 ## 当前功能
 
 ### 核心契约与入口
@@ -168,8 +178,13 @@ Bale_Coding_Agent_Harness/
 │   ├── servers.json          # stdio MCP 服务配置样例
 │   └── write_server.py       # 独立 FastMCP 服务端示例
 ├── docs/
+│   ├── README.md             # 文档索引与阅读路径
+│   ├── quickstart.md         # 安装、运行、验证与故障排查
+│   ├── configuration.md      # 配置优先级、环境变量与运行参数
 │   ├── architecture.md       # 当前实现与目标运行时架构
-│   └── quickstart.md         # 安装、运行、验证与故障排查
+│   ├── security.md           # 信任模型与安全边界
+│   ├── troubleshooting.md    # 按现象组织的排错指南
+│   └── evaluation/           # 评测用法、任务格式与证据边界
 ├── .github/workflows/ci.yml  # Python 3.11 基础检查
 ├── .env.example              # 无密钥配置样例
 ├── pyproject.toml            # 包元数据与工具配置
