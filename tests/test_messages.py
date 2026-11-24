@@ -73,3 +73,18 @@ def test_chat_message_accepts_all_roles(role: str) -> None:
 def test_chat_message_rejects_unknown_role() -> None:
     with pytest.raises(ValidationError):
         ChatMessage(role="bot", content="hi")
+
+
+def test_tool_calls_are_only_allowed_on_assistant_messages() -> None:
+    call = ToolCall(call_id="c1", name="read_file")
+
+    message = ChatMessage(role="assistant", content="", tool_calls=[call])
+
+    assert message.tool_calls == [call]
+    with pytest.raises(ValidationError, match="only allowed on assistant"):
+        ChatMessage(role="user", content="hi", tool_calls=[call])
+
+
+def test_tool_message_requires_tool_call_id() -> None:
+    with pytest.raises(ValidationError, match="require tool_call_id"):
+        ChatMessage(role="tool", content="result")
