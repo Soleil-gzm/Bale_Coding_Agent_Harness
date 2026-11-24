@@ -7,6 +7,9 @@ same turn and streams trace events as Server-Sent Events, ending with a
 bearer token when ``BALE_HTTP_API_KEY`` is set. ``POST /v1/runs/{run_id}/cancel``
 cooperatively cancels an in-flight run at the next iteration boundary.
 
+When ``BALE_MCP_CONFIG`` points at a server file, the app connects those stdio
+servers once at startup and registers their tools on every run.
+
 HTTP runs are non-interactive: write and execute tools are denied unless the
 caller sets ``approve_writes=true``.
 """
@@ -14,7 +17,8 @@ caller sets ``approve_writes=true``.
 import asyncio
 import hmac
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any
@@ -28,6 +32,8 @@ from bale_harness.agent.approval import auto_approve
 from bale_harness.agent.checkpoint import ShadowGit
 from bale_harness.agent.cost import CostRates
 from bale_harness.agent.loop import RunResult, build_default_loop
+from bale_harness.agent.tools.mcp import load_mcp_config, mcp_tools
+from bale_harness.agent.tools.registry import Tool
 from bale_harness.agent.trace import (
     JsonlTraceExporter,
     QueueTraceExporter,
@@ -158,6 +164,7 @@ async def _execute(
     *,
     tracer: TraceExporter | None = None,
     cancel: asyncio.Event | None = None,
+    extra_tools: Sequence[Tool] | None = None,
 ) -> RunResult:
     checkpoint = ShadowGit(request.workspace) if request.shadow_git else None
     if tracer is None and settings.trace_path:
@@ -171,6 +178,7 @@ async def _execute(
         context_window=settings.context_window,
         tracer=tracer,
         cost_rates=_cost_rates(settings),
+        extra_tools=extra_tools,
     )
     try:
         return await loop.run(_build_turn(request), cancelled=cancel)
@@ -189,6 +197,7 @@ def _stream_events(
     provider: ModelProvider,
     handle: RunHandle,
     registry: RunRegistry,
+    extra_tools: Sequence[Tool] | None = None,
 ) -> AsyncIterator[str]:
     """Return an SSE body that runs the turn as events are consumed."""
     queue = QueueTraceExporter()
@@ -204,6 +213,7 @@ def _stream_events(
                 provider,
                 tracer=tracer,
                 cancel=handle.cancel,
+                extra_tools=extra_tools,
             )
         )
         task.add_done_callback(lambda _: queue.close_nowait())
@@ -232,9 +242,20 @@ def create_app(
     resolved = settings or Settings()
     model_provider = provider or create_provider(resolved)
     api_key = resolved.http_api_key
-    app = FastAPI(title="Bale Coding Agent Harness")
+    mcp_configs = load_mcp_config(resolved.mcp_config) if resolved.mcp_config else []
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        async with mcp_tools(mcp_configs) as tools:
+            application.state.extra_tools = tools
+            yield
+
+    app = FastAPI(title="Bale Coding Agent Harness", lifespan=lifespan)
     app.state.runs = RunRegistry()
     registry: RunRegistry = app.state.runs
+
+    def _extra_tools() -> Sequence[Tool]:
+        return getattr(app.state, "extra_tools", [])
 
     def _require_auth(
         authorization: Annotated[str | None, Header()] = None,
@@ -286,6 +307,7 @@ def create_app(
                 resolved,
                 model_provider,
                 cancel=handle.cancel,
+                extra_tools=_extra_tools(),
             )
         finally:
             registry.finish(handle)
@@ -303,7 +325,14 @@ def create_app(
                 detail=str(error),
             ) from error
         return StreamingResponse(
-            _stream_events(request, resolved, model_provider, handle, registry),
+            _stream_events(
+                request,
+                resolved,
+                model_provider,
+                handle,
+                registry,
+                extra_tools=_extra_tools(),
+            ),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",

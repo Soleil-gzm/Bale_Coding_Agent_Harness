@@ -631,6 +631,17 @@ def chat_command(
         Path | None,
         typer.Option(help="Persistent shadow git directory (outside the workspace)"),
     ] = None,
+    mcp_config: Annotated[
+        Path | None,
+        typer.Option(
+            "--mcp-config",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="JSON file describing stdio MCP servers",
+        ),
+    ] = None,
 ) -> None:
     """Run an interactive multi-turn session; type /exit to quit."""
     if sandbox != "local":
@@ -640,6 +651,12 @@ def chat_command(
     parsed_session_id = _parse_session_id(session_id)
     settings = Settings()
     provider = create_provider(settings)
+    mcp_servers: list[McpServerConfig] = []
+    if mcp_config is not None:
+        try:
+            mcp_servers = load_mcp_config(mcp_config)
+        except McpConfigError as error:
+            raise typer.BadParameter(str(error)) from error
     checkpoint: ShadowGit | None = None
     if shadow_git:
         if checkpoint_dir is not None or session_db is not None:
@@ -655,40 +672,49 @@ def chat_command(
         else:
             checkpoint = ShadowGit(workspace)
     approver: Decider = auto_approve if yes else _console_decider
-    loop = build_default_loop(
-        provider,
-        workspace,
-        approval_mode=approval_mode,
-        approver=approver,
-        checkpoint=checkpoint,
-        session=SessionStore(session_db) if session_db is not None else None,
-        context_window=settings.context_window,
-        cost_rates=_cost_rates(settings),
-    )
-    typer.echo(f"session {parsed_session_id} (type /exit to quit)")
-    try:
-        while True:
-            try:
-                message = typer.prompt("you", prompt_suffix="> ")
-            except (EOFError, KeyboardInterrupt):
-                typer.echo("")
-                break
-            if message.strip() in {"/exit", "/quit"}:
-                break
-            if not message.strip():
-                continue
-            turn = Turn(
-                message=message,
-                workspace=workspace,
-                session_id=parsed_session_id,
-                token_budget=token_budget,
-                max_iterations=max_iterations,
+
+    async def _drive() -> None:
+        """Keep one async context alive so MCP sessions span every turn."""
+        async with mcp_tools(mcp_servers) as extra_tools:
+            loop = build_default_loop(
+                provider,
+                workspace,
                 approval_mode=approval_mode,
+                approver=approver,
+                checkpoint=checkpoint,
+                session=SessionStore(session_db) if session_db is not None else None,
+                context_window=settings.context_window,
+                cost_rates=_cost_rates(settings),
+                extra_tools=extra_tools,
             )
-            result: RunResult = asyncio.run(loop.run(turn))
-            typer.echo(
-                result.answer or f"[{result.status}] {result.error or ''}".rstrip()
-            )
+            typer.echo(f"session {parsed_session_id} (type /exit to quit)")
+            while True:
+                try:
+                    message = await asyncio.to_thread(
+                        typer.prompt, "you", prompt_suffix="> "
+                    )
+                except (EOFError, KeyboardInterrupt):
+                    typer.echo("")
+                    break
+                if message.strip() in {"/exit", "/quit"}:
+                    break
+                if not message.strip():
+                    continue
+                turn = Turn(
+                    message=message,
+                    workspace=workspace,
+                    session_id=parsed_session_id,
+                    token_budget=token_budget,
+                    max_iterations=max_iterations,
+                    approval_mode=approval_mode,
+                )
+                result: RunResult = await loop.run(turn)
+                typer.echo(
+                    result.answer or f"[{result.status}] {result.error or ''}".rstrip()
+                )
+
+    try:
+        asyncio.run(_drive())
     finally:
         if checkpoint is not None:
             asyncio.run(checkpoint.cleanup())

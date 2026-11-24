@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Literal, Self
 from urllib.parse import urlparse
 
@@ -31,6 +32,7 @@ class Settings(BaseSettings):
     input_cost_per_1k: float | None = Field(default=None, ge=0)
     output_cost_per_1k: float | None = Field(default=None, ge=0)
     http_api_key: SecretStr | None = None
+    mcp_config: Path | None = None
 
     @model_validator(mode="after")
     def validate_provider_credentials(self) -> Self:
