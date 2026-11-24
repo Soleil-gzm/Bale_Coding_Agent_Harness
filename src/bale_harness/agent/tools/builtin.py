@@ -7,52 +7,18 @@ from typing import Any
 
 from bale_harness.agent.messages import ToolSpec
 from bale_harness.agent.security import WorkspaceError, WorkspaceGuard
+from bale_harness.agent.tools.common import (
+    MAX_OUTPUT_CHARS,
+    error,
+    success,
+    truncate,
+)
 from bale_harness.agent.tools.registry import BaseTool
 from bale_harness.contracts import ToolResult
 
 MAX_READ_BYTES = 64 * 1024
 MAX_LIST_ENTRIES = 500
 MAX_SEARCH_MATCHES = 100
-MAX_OUTPUT_CHARS = 30_000
-
-
-def _elapsed_ms(start: float) -> int:
-    return max(0, int((time.perf_counter() - start) * 1000))
-
-
-def _success(
-    name: str,
-    content: str,
-    metadata: dict[str, Any] | None = None,
-    truncated: bool = False,
-    start: float = 0.0,
-) -> ToolResult:
-    return ToolResult(
-        call_id="",
-        name=name,
-        status="success",
-        content=content,
-        truncated=truncated,
-        latency_ms=_elapsed_ms(start),
-        metadata=metadata or {},
-    )
-
-
-def _error(name: str, message: str, error_code: str, start: float = 0.0) -> ToolResult:
-    return ToolResult(
-        call_id="",
-        name=name,
-        status="error",
-        content=message,
-        error_code=error_code,
-        latency_ms=_elapsed_ms(start),
-    )
-
-
-def _truncate(text: str, limit: int) -> tuple[str, bool]:
-    if len(text) <= limit:
-        return text, False
-    return text[:limit], True
 
 
 class ReadFileTool(BaseTool):
@@ -82,19 +48,19 @@ class ReadFileTool(BaseTool):
         try:
             resolved = self._guard.resolve(rel)
         except WorkspaceError:
-            return _error(
+            return error(
                 "read_file", f"path escapes workspace: {rel}", "path_escape", start
             )
         if not resolved.exists():
-            return _error("read_file", f"file not found: {rel}", "not_found", start)
+            return error("read_file", f"file not found: {rel}", "not_found", start)
         if not resolved.is_file():
-            return _error("read_file", f"not a file: {rel}", "not_a_file", start)
+            return error("read_file", f"not a file: {rel}", "not_a_file", start)
 
         total = resolved.stat().st_size
         data = resolved.read_bytes()[:MAX_READ_BYTES]
         content = data.decode("utf-8", errors="replace")
         truncated = total > MAX_READ_BYTES
-        return _success(
+        return success(
             "read_file",
             content,
             metadata={"path": rel, "bytes": len(data)},
@@ -130,13 +96,13 @@ class ListFilesTool(BaseTool):
         try:
             resolved = self._guard.resolve(rel)
         except WorkspaceError:
-            return _error(
+            return error(
                 "list_files", f"path escapes workspace: {rel}", "path_escape", start
             )
         if not resolved.exists():
-            return _error("list_files", f"path not found: {rel}", "not_found", start)
+            return error("list_files", f"path not found: {rel}", "not_found", start)
         if not resolved.is_dir():
-            return _error(
+            return error(
                 "list_files", f"not a directory: {rel}", "not_a_directory", start
             )
 
@@ -149,8 +115,8 @@ class ListFilesTool(BaseTool):
                 break
             suffix = "/" if entry.is_dir() else ""
             lines.append(f"{entry.name}{suffix}")
-        content, output_truncated = _truncate("\n".join(lines), MAX_OUTPUT_CHARS)
-        return _success(
+        content, output_truncated = truncate("\n".join(lines), MAX_OUTPUT_CHARS)
+        return success(
             "list_files",
             content,
             metadata={"path": rel, "count": len(lines)},
@@ -197,11 +163,11 @@ class SearchFilesTool(BaseTool):
         try:
             root = self._guard.resolve(rel)
         except WorkspaceError:
-            return _error(
+            return error(
                 "search_files", f"path escapes workspace: {rel}", "path_escape", start
             )
         if not root.exists():
-            return _error("search_files", f"path not found: {rel}", "not_found", start)
+            return error("search_files", f"path not found: {rel}", "not_found", start)
 
         regex = re.compile(pattern)
         matches: list[str] = []
@@ -220,8 +186,8 @@ class SearchFilesTool(BaseTool):
                     break
             except OSError:
                 continue
-        content, output_truncated = _truncate("\n".join(matches), MAX_OUTPUT_CHARS)
-        return _success(
+        content, output_truncated = truncate("\n".join(matches), MAX_OUTPUT_CHARS)
+        return success(
             "search_files",
             content,
             metadata={"pattern": pattern, "path": rel, "count": len(matches)},
