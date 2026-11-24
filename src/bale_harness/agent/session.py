@@ -143,6 +143,18 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+class SessionSummary(BaseModel):
+    """Lightweight view of a persisted session for inspection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: UUID
+    workspace: Path
+    created_at: str
+    updated_at: str
+    turns: int = 0
+
+
 def _workspace_key(workspace: Path) -> str:
     return str(Path(workspace).expanduser().resolve())
 
@@ -672,6 +684,34 @@ class SessionStore:
         finally:
             connection.close()
         return [_turn_record(row) for row in rows]
+
+    async def list_sessions(self) -> list[SessionSummary]:
+        await self.init()
+        return await asyncio.to_thread(self._list_sessions_sync)
+
+    def _list_sessions_sync(self) -> list[SessionSummary]:
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                "SELECT s.session_id, s.workspace, s.created_at, s.updated_at,"
+                " COUNT(t.turn_id) AS turn_count"
+                " FROM sessions s"
+                " LEFT JOIN turns t ON t.session_id = s.session_id"
+                " GROUP BY s.session_id"
+                " ORDER BY s.updated_at DESC"
+            ).fetchall()
+        finally:
+            connection.close()
+        return [
+            SessionSummary(
+                session_id=UUID(row["session_id"]),
+                workspace=Path(row["workspace"]),
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+                turns=row["turn_count"],
+            )
+            for row in rows
+        ]
 
     async def append_memory(
         self, session_id: UUID, turn_id: UUID, content: str

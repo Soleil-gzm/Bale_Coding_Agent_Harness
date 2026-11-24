@@ -253,3 +253,22 @@ def test_list_turns_returns_insertion_order(tmp_path: Path) -> None:
 
     assert [turn.message for turn in turns] == ["first", "second"]
     assert [turn.status for turn in turns] == ["completed", "running"]
+
+
+def test_list_sessions_summarizes_turn_counts(tmp_path: Path) -> None:
+    async def scenario():
+        store = SessionStore(tmp_path / "sessions.db")
+        session_id = uuid4()
+        first = _turn(tmp_path, "first").model_copy(update={"session_id": session_id})
+        second = _turn(tmp_path, "second").model_copy(update={"session_id": session_id})
+        await store.start_turn(first)
+        await store.start_turn(second)
+        await store.finish_turn(first.turn_id, "completed", answer="done")
+        return session_id, await store.list_sessions()
+
+    session_id, sessions = _run(scenario())
+
+    assert len(sessions) == 1
+    assert sessions[0].session_id == session_id
+    assert sessions[0].turns == 2
+    assert sessions[0].workspace == tmp_path
