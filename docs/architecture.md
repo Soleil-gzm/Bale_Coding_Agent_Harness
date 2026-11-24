@@ -4,7 +4,7 @@
 
 本文同时记录两类内容：
 
-- **当前实现**：B0 工程骨架、Turn/ToolResult 契约、Settings、ModelProvider/FakeProvider、共享 Turn 构造入口；B1 只读 ReAct 运行时（AgentLoop、ToolRegistry、只读内置工具、Workspace 路径防护与 `bale run` 入口）；B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、LocalSandbox、审批策略、ShadowGit 快照与调用幂等）；B3 上下文与会话运行时（Token 预算、历史裁剪、稳定系统前缀、SQLite Session、`after_turn` 记忆、取消与恢复）；B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）；B5 运行报告（Session/Trace 到 Markdown）；B6 本地闭环增强（持久化 Checkpoint 与 `bale undo`、`bale session`/`bale trace` 检查命令、`bale chat` 多轮交互、`move_file`/`delete_file`/`apply_patch`、OpenAI 兼容 Provider、`py.typed`）；以及可独立运行的 FastMCP 文件写入示例。
+- **当前实现**：B0 工程骨架、Turn/ToolResult 契约、Settings、ModelProvider/FakeProvider、共享 Turn 构造入口；B1 只读 ReAct 运行时（AgentLoop、ToolRegistry、只读内置工具、Workspace 路径防护与 `bale run` 入口）；B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、LocalSandbox、审批策略、ShadowGit 快照与调用幂等）；B3 上下文与会话运行时（Token 预算、历史裁剪、稳定系统前缀、SQLite Session、`after_turn` 记忆、取消与恢复）；B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）；B5 运行报告（Session/Trace 到 Markdown）；B6 本地闭环增强（持久化 Checkpoint 与 `bale undo`、`bale session`/`bale trace` 检查命令、`bale chat` 多轮交互、`move_file`/`delete_file`/`apply_patch`、OpenAI 兼容 Provider、`py.typed`）；B7 HTTP 执行与 SSE（`POST /v1/runs`、`POST /v1/runs/stream`）；以及可独立运行的 FastMCP 文件写入示例。
 - **目标架构**：Coding Agent Harness 的后续设计方向，用于约束模块边界和扩展方式。
 
 除特别注明外，带有“规划”“目标”或“后续”标识的模块均未在当前仓库实现。文档中的目标接口是逻辑契约，不代表已有 Python 类或稳定 API。
@@ -56,13 +56,13 @@ flowchart LR
 | `providers_openai.py` | OpenAI 兼容 Chat Completions：消息/工具编码、响应解析、429/5xx 退避、错误脱敏 | 非流式，仅标准库 `urllib` |
 | `turns.py` | 校验入口输入并统一构造 `created` Turn | 不创建 workspace，不执行 Turn |
 | `cli.py` | 将命令行参数转换为 TurnRequest 并输出 JSON | 初始化配置和 Provider，但不调用 `complete()` |
-| `http.py` | 通过应用工厂暴露 `POST /v1/turns` | 无执行、Session、SSE、健康检查或持久化 |
+| `http.py` | 应用工厂：`POST /v1/turns`、`POST /v1/runs`、`POST /v1/runs/stream` | 无认证、Session、HTTP 审批或健康检查 |
 
 CLI 和 HTTP 对相同输入生成相同的非 ID 字段；`turn_id` 和 `session_id` 分别随机生成。HTTP 环境在调用 `create_app()` 时加载，导入模块本身不读取环境。
 
 ### 3.2 B1 只读、B2a 写入、B3 上下文/会话与 B4 追踪/成本运行时
 
-B1 实现了最小 ReAct 闭环：模型请求工具调用 → 注册表治理执行 → 结果回注上下文 → 无工具调用时结束。B2a 在同一注册表上加入写入与执行工具：调用先经审批，`shell`/`run_tests` 交由 `LocalSandbox` 执行，每次迭代结束由 `ShadowGit` 在独立 git-dir 中快照，最终把 Diff 写入结果。B3 在循环外补充上下文与状态：每次模型调用前由 `ContextBuilder` 用稳定系统前缀、Session 记忆和裁剪后的历史重建提示；可选 `SessionStore` 以 SQLite 追加保存消息、Turn 状态、已执行调用和 `after_turn` 记忆，取消或中断后可按 Turn 恢复且不重复副作用。B4 在循环内埋点：`JsonlTraceExporter` 追加记录 `turn_started`、`model_call`、`tool_call`、`checkpoint` 与 `turn_finished`，`CostRates` 在配置费率后给出估算成本；追踪是 best-effort，写入失败不会改变 Turn 结果。B5 在循环外做只读投影：`build_report` 汇总 Session 中的 Turn、已执行调用、记忆与 Trace，生成 Markdown 报告，不调用模型、不写入 Session。B6 补全本地闭环：`--session-db`/`--checkpoint-dir` 让 ShadowGit git-dir 跨进程保留，复用已有 `HEAD` 作为基线，`bale undo` 按基线或指定快照恢复工作区；`bale session list/show` 与 `bale trace` 只读检查状态，`bale chat` 在单 Session 上循环 Turn；`providers_openai.OpenAICompatibleProvider` 以标准库 `urllib` 接入 OpenAI/DeepSeek/Ollama。
+B1 实现了最小 ReAct 闭环：模型请求工具调用 → 注册表治理执行 → 结果回注上下文 → 无工具调用时结束。B2a 在同一注册表上加入写入与执行工具：调用先经审批，`shell`/`run_tests` 交由 `LocalSandbox` 执行，每次迭代结束由 `ShadowGit` 在独立 git-dir 中快照，最终把 Diff 写入结果。B3 在循环外补充上下文与状态：每次模型调用前由 `ContextBuilder` 用稳定系统前缀、Session 记忆和裁剪后的历史重建提示；可选 `SessionStore` 以 SQLite 追加保存消息、Turn 状态、已执行调用和 `after_turn` 记忆，取消或中断后可按 Turn 恢复且不重复副作用。B4 在循环内埋点：`JsonlTraceExporter` 追加记录 `turn_started`、`model_call`、`tool_call`、`checkpoint` 与 `turn_finished`，`CostRates` 在配置费率后给出估算成本；追踪是 best-effort，写入失败不会改变 Turn 结果。B5 在循环外做只读投影：`build_report` 汇总 Session 中的 Turn、已执行调用、记忆与 Trace，生成 Markdown 报告，不调用模型、不写入 Session。B6 补全本地闭环：`--session-db`/`--checkpoint-dir` 让 ShadowGit git-dir 跨进程保留，复用已有 `HEAD` 作为基线，`bale undo` 按基线或指定快照恢复工作区；`bale session list/show` 与 `bale trace` 只读检查状态，`bale chat` 在单 Session 上循环 Turn；`providers_openai.OpenAICompatibleProvider` 以标准库 `urllib` 接入 OpenAI/DeepSeek/Ollama。B7 补齐 HTTP 执行：`POST /v1/runs` 同步执行并返回 `RunResult`，`POST /v1/runs/stream` 复用 Trace 事件，通过内存队列转成 SSE，最终发送 `result`；HTTP 路径不接 Session，默认无审批器（写入被拒绝），仅在 `approve_writes=true` 时使用 `auto_approve`。
 
 ```mermaid
 flowchart LR
@@ -229,11 +229,11 @@ flowchart TB
 | `sandbox/` | 本地、容器和远程执行适配 | 统一 Sandbox 端口 |
 | `repo_index/` | AST 切块、词法索引和行号引用 | Retriever 端口 |
 | `providers/` | 真实模型调用、结构化输出和用量 | 当前 ModelProvider 端口 |
-| `server/` | HTTP 执行、Session、审批和健康检查 | Runtime、当前 Turn 构造入口 |
+| `server/` | HTTP 认证、Session、审批和健康检查 | Runtime、现有 `http.py` 执行入口 |
 | `tracing/` | Span、错误、Token、延迟和成本 | 无 Runtime 反向依赖 |
 | `eval/` | 固定任务、确定性验证和报告 | CLI、Workspace、Verifier |
 
-这些路径用于说明职责边界。B1 已实现 `agent/loop.py`、`agent/context.py`（最小前缀）、`agent/tools/registry.py`、`agent/tools/builtin.py`（只读工具）和 `agent/security.py`；B2a 已实现 `agent/approval.py`、`agent/sandbox.py`（LocalSandbox）、`agent/checkpoint.py`（ShadowGit）、`agent/tools/write.py`、`agent/tools/exec.py` 与 `agent/tools/git.py`；B3 已实现 `agent/history.py`、完整的 `agent/context.py`、`agent/session.py` 与 `agent/memory.py`；B4 已实现 `agent/trace.py` 与 `agent/cost.py`；B5 已实现 `agent/report.py`；B6 已实现 `providers_openai.py`、Checkpoint 持久化/`undo`、`session`/`trace`/`chat` CLI 与扩展写入工具；其余模块（如 `agent/tools/mcp.py`、`repo_index/`、`eval/`、Docker sandbox）仍为规划，不能当作已有能力。后续实现时应以实际代码和测试为准更新本文。
+这些路径用于说明职责边界。B1 已实现 `agent/loop.py`、`agent/context.py`（最小前缀）、`agent/tools/registry.py`、`agent/tools/builtin.py`（只读工具）和 `agent/security.py`；B2a 已实现 `agent/approval.py`、`agent/sandbox.py`（LocalSandbox）、`agent/checkpoint.py`（ShadowGit）、`agent/tools/write.py`、`agent/tools/exec.py` 与 `agent/tools/git.py`；B3 已实现 `agent/history.py`、完整的 `agent/context.py`、`agent/session.py` 与 `agent/memory.py`；B4 已实现 `agent/trace.py` 与 `agent/cost.py`；B5 已实现 `agent/report.py`；B6 已实现 `providers_openai.py`、Checkpoint 持久化/`undo`、`session`/`trace`/`chat` CLI 与扩展写入工具；B7 已实现 `http.py` 的执行与 SSE 端点；其余模块（如 `agent/tools/mcp.py`、`repo_index/`、`eval/`、Docker sandbox、HTTP 认证/Session）仍为规划，不能当作已有能力。后续实现时应以实际代码和测试为准更新本文。
 
 ## 6. 核心逻辑契约
 

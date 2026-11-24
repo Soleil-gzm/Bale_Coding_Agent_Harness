@@ -2,7 +2,7 @@
 
 Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目标是将模型交互、工具治理、上下文管理、隔离执行、状态恢复和执行证据组织为可扩展的薄内核。
 
-**当前仓库处于早期建设阶段。** 已落地 B0 工程基础、B1 只读 ReAct 运行时、B2a 写入运行时、B3 上下文/会话运行时、B4 追踪/成本运行时、B5 运行报告和 B6 本地闭环增强：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider 与 OpenAI 兼容 Provider、只创建 Turn 的 CLI/HTTP 入口，带审批、ShadowGit 快照和本地 Sandbox 的 `bale run`，Token 预算、历史裁剪、SQLite Session 与取消恢复，JSONL Trace 与可选成本估算，基于 Session/Trace 的 Markdown 报告，持久化 Checkpoint 与 `bale undo`，`bale chat` 多轮交互，`bale session`/`bale trace` 检查命令，以及 `move_file`/`delete_file`/`apply_patch` 写入工具。Docker 容器隔离、检索与 HTTP 执行接口仍未实现。
+**当前仓库处于早期建设阶段。** 已落地 B0 工程基础、B1 只读 ReAct 运行时、B2a 写入运行时、B3 上下文/会话运行时、B4 追踪/成本运行时、B5 运行报告、B6 本地闭环增强和 B7 HTTP 执行/SSE：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider 与 OpenAI 兼容 Provider、只创建 Turn 的 CLI/HTTP 入口，带审批、ShadowGit 快照和本地 Sandbox 的 `bale run`，Token 预算、历史裁剪、SQLite Session 与取消恢复，JSONL Trace 与可选成本估算，基于 Session/Trace 的 Markdown 报告，持久化 Checkpoint 与 `bale undo`，`bale chat` 多轮交互，`bale session`/`bale trace` 检查命令，`move_file`/`delete_file`/`apply_patch` 写入工具，以及执行 Turn 的 `POST /v1/runs` 与 SSE 流式 `POST /v1/runs/stream`。Docker 容器隔离、检索、HTTP 认证与 HTTP 审批流仍未实现。
 
 ## 当前功能
 
@@ -12,6 +12,7 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - `Settings` 读取 `BALE_` 环境变量；`openai` 模式缺少有效 Key 时立即报错（本地 Ollama 端点除外），密钥不会在 `repr` 中明文显示。
 - `ModelProvider` 定义最小异步契约，`FakeProvider` 提供确定性离线响应并记录收到的 Turn；`OpenAICompatibleProvider` 通过标准库 `urllib` 调用任意 OpenAI 兼容 `/chat/completions` 端点（OpenAI、DeepSeek、Ollama），429/5xx 指数退避，错误信息自动脱敏。
 - `bale turn` 与 `POST /v1/turns` 复用同一 `build_turn()` 构造逻辑，返回字段一致的 `created` Turn。
+- `POST /v1/runs` 执行一个 Turn 并返回 `RunResult`；`POST /v1/runs/stream` 执行同一 Turn，以 SSE 推送 Trace 事件，最后发送 `result` 事件。
 - CLI 和 HTTP 只创建 Turn，不调用模型或工具。
 
 ### 只读与写入运行时
@@ -38,6 +39,12 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - 追踪默认脱敏：不写完整 Prompt、回答或工具参数，只写 token 数、消息数、工具名、状态和错误码。
 - Trace 写入失败不会改变 Turn 结果；`bale run --trace path.jsonl` 启用，`BALE_TRACE_PATH` 可提供默认路径。
 - 同时配置 `BALE_INPUT_COST_PER_1K` 与 `BALE_OUTPUT_COST_PER_1K` 后，`RunResult.estimated_cost` 给出估算成本；未配置时为 `null`。
+
+### HTTP 执行与 SSE
+
+- `POST /v1/runs` 在服务端执行一个 Turn，返回与 CLI 一致的 `RunResult`；`approve_writes` 默认 `false`，写/执行工具会被拒绝。
+- `POST /v1/runs/stream` 返回 `text/event-stream`：先逐条发送 `event: trace`，结束时发送 `event: result`；执行异常发送 `event: error`。
+- 两者都不使用 SQLite Session、不提供 HTTP 审批流；`approve_writes=true` 表示调用方已自行确认风险，应仅在本机或内网使用。
 
 ### 运行报告
 
@@ -74,7 +81,8 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - Checkpoint 目录已可持久化并支持 `bale undo`，但没有快照浏览/清理命令，也依赖本机 `git`。
 - Trace 为本地追加 JSONL，无轮转、采样或远程导出；`estimated_cost` 只是按配置费率的估算，不代表 Provider 账单。
 - 运行报告是只读 Markdown 投影，只提供 CLI 入口，不包含 HTML/PDF 导出或 HTTP 报告接口。
-- 不包含检索（BM25/向量）、评测 harness、SSE 或 HTTP 执行接口。
+- 不包含检索（BM25/向量）或评测 harness。
+- HTTP 接口没有认证、限流、Session 或交互式审批；默认拒绝写入，`approve_writes=true` 只应由可信调用方使用。
 - `bale chat` 的跨 Turn 连续性依赖 Session 记忆摘要，不携带完整历史，也不会自动压缩超长对话。
 - 审批只在 CLI 中提供交互确认与 `--yes`，没有 HTTP 审批流。
 - MCP 示例的文件名精度为秒，同一秒内的重复调用可能覆盖同名文件。
@@ -113,7 +121,7 @@ Bale_Coding_Agent_Harness/
 │   ├── py.typed              # PEP 561 类型标记
 │   ├── turns.py              # TurnRequest 与共享 build_turn()
 │   ├── cli.py                # bale turn/run/chat/report/session/trace/undo
-│   ├── http.py               # POST /v1/turns 应用工厂
+│   ├── http.py               # /v1/turns、/v1/runs、/v1/runs/stream
 │   └── agent/                # ReAct 运行时
 │       ├── messages.py       # 运行时消息与工具契约
 │       ├── security.py       # WorkspaceGuard 路径防护

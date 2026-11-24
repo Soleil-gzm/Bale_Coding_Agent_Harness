@@ -1,6 +1,6 @@
 # Bale Coding Agent Harness 快速启动指南
 
-本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时、B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、审批与 ShadowGit）、B3 上下文与会话运行时（Token 预算、历史裁剪、SQLite Session、取消恢复）、B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）、B5 运行报告（Session/Trace 到 Markdown）、B6 本地闭环增强（持久化 Checkpoint 与 `undo`、`session`/`trace` 检查、`chat` 多轮、扩展写入工具、OpenAI 兼容 Provider）和 FastMCP 文件写入示例。Docker 容器隔离尚未实现；B2a 的本地执行只适用于受控开发场景。默认 Fake 配置不需要模型、数据库服务或容器服务。
+本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时、B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、审批与 ShadowGit）、B3 上下文与会话运行时（Token 预算、历史裁剪、SQLite Session、取消恢复）、B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）、B5 运行报告（Session/Trace 到 Markdown）、B6 本地闭环增强（持久化 Checkpoint 与 `undo`、`session`/`trace` 检查、`chat` 多轮、扩展写入工具、OpenAI 兼容 Provider）、B7 HTTP 执行/SSE（`/v1/runs`、`/v1/runs/stream`）和 FastMCP 文件写入示例。Docker 容器隔离尚未实现；B2a 的本地执行只适用于受控开发场景。默认 Fake 配置不需要模型、数据库服务或容器服务。
 
 ## 1. 环境要求
 
@@ -276,15 +276,15 @@ bale undo \
 
 三者均为写副作用，需要审批。
 
-## 5. 使用 HTTP 创建 Turn
+## 5. 使用 HTTP 创建与执行 Turn
 
-启动应用工厂：
+启动应用工厂（默认读取项目根目录 `.env`）：
 
 ```bash
 uvicorn bale_harness.http:create_app --factory --host 127.0.0.1 --port 8000
 ```
 
-在另一个终端发送请求，将 workspace 替换为实际路径：
+仅创建 Turn：
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/turns \
@@ -298,7 +298,38 @@ curl -X POST http://127.0.0.1:8000/v1/turns \
 
 成功时返回 HTTP 201 和与 CLI 相同的 Turn 结构。相同输入下，除分别生成的随机 ID 外字段一致。非法预算、空白消息和未知字段返回 HTTP 422。
 
-当前业务接口只有 `POST /v1/turns`，没有 Turn 执行、Session、SSE、健康检查或持久化接口。
+执行 Turn（非流式）：
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/runs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Inspect the repository",
+    "workspace": "/absolute/path/workspace",
+    "token_budget": 4096,
+    "max_iterations": 4,
+    "approve_writes": false,
+    "shadow_git": false
+  }'
+```
+
+返回 HTTP 200 与 `RunResult`。`approve_writes` 默认 `false`，写/执行工具会被拒绝；HTTP 没有交互式审批，只有可信调用方才应设为 `true`。
+
+以 SSE 流式观察同一 Turn：
+
+```bash
+curl -N -X POST http://127.0.0.1:8000/v1/runs/stream \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Inspect the repository",
+    "workspace": "/absolute/path/workspace",
+    "shadow_git": false
+  }'
+```
+
+事件顺序为若干 `event: trace`（`turn_started`、`model_call`、`tool_call`、`turn_finished` 等），最后是 `event: result`；执行异常会发送 `event: error`。客户端断开时服务端会取消执行。
+
+当前 HTTP 接口不支持 Session 持久化、认证、限流或 HTTP 审批流；`workspace` 由调用方指定，服务应只监听本机或可信内网。
 
 ## 6. 启动 MCP 服务端
 
@@ -462,7 +493,7 @@ pytest -q
 python -m compileall examples
 ```
 
-测试覆盖契约、配置、FakeProvider、CLI/HTTP 同构、HTTP 输入校验、B1 只读运行时（消息契约、路径防护、工具注册器、只读工具、ReAct 循环、CLI run）、B2a 写入运行时（审批策略、Sandbox 防护、ShadowGit、写入/编辑、执行工具、幂等与端到端改码闭环）、B3 上下文与会话（预算非负、整 Turn 裁剪与配对、稳定前缀、SQLite 往返与事务回滚、记忆、取消恢复与不重复写入）、B4 追踪与成本（事件顺序、追加写入、脱敏、失败不阻断、成本估算）、B5 运行报告（Session 顺序、Trace 回读、报告内容、`--output`）、B6 本地闭环（Session 汇总、Checkpoint 跨进程基线、`session`/`trace`/`chat`/`undo`、扩展写入工具、OpenAI 兼容 Provider 映射/重试/脱敏、本地端点免 Key）和 MCP 示例语法，不需要网络或 API Key。部分测试会在临时目录启动真实 pytest 子进程。仓库已配置 GitHub Actions，但远程结果应以 Actions 页面为准。
+测试覆盖契约、配置、FakeProvider、CLI/HTTP 同构、HTTP 输入校验、B1 只读运行时（消息契约、路径防护、工具注册器、只读工具、ReAct 循环、CLI run）、B2a 写入运行时（审批策略、Sandbox 防护、ShadowGit、写入/编辑、执行工具、幂等与端到端改码闭环）、B3 上下文与会话（预算非负、整 Turn 裁剪与配对、稳定前缀、SQLite 往返与事务回滚、记忆、取消恢复与不重复写入）、B4 追踪与成本（事件顺序、追加写入、脱敏、失败不阻断、成本估算）、B5 运行报告（Session 顺序、Trace 回读、报告内容、`--output`）、B6 本地闭环（Session 汇总、Checkpoint 跨进程基线、`session`/`trace`/`chat`/`undo`、扩展写入工具、OpenAI 兼容 Provider 映射/重试/脱敏、本地端点免 Key）和 B7 HTTP 执行/SSE（默认拒绝写入、显式审批后写入、SSE 事件顺序与 `result` 结束）以及 MCP 示例语法，不需要网络或 API Key。部分测试会在临时目录启动真实 pytest 子进程。仓库已配置 GitHub Actions，但远程结果应以 Actions 页面为准。
 
 修改 MCP 示例后，重新执行第 7 节脚本，确认：
 
