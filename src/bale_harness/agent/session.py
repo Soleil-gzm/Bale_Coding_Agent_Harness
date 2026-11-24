@@ -658,6 +658,21 @@ class SessionStore:
             connection.close()
         return None if row is None else _turn_record(row)
 
+    async def list_turns(self, session_id: UUID) -> list[TurnRecord]:
+        await self.init()
+        return await asyncio.to_thread(self._list_turns_sync, session_id)
+
+    def _list_turns_sync(self, session_id: UUID) -> list[TurnRecord]:
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                "SELECT * FROM turns WHERE session_id = ? ORDER BY rowid",
+                (str(session_id),),
+            ).fetchall()
+        finally:
+            connection.close()
+        return [_turn_record(row) for row in rows]
+
     async def append_memory(
         self, session_id: UUID, turn_id: UUID, content: str
     ) -> None:

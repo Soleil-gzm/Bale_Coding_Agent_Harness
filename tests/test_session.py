@@ -1,6 +1,7 @@
 import asyncio
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -235,3 +236,20 @@ def test_memory_entries_are_returned_in_order(tmp_path: Path) -> None:
 
     assert latest == ["two"]
     assert all_entries == ["one", "two"]
+
+
+def test_list_turns_returns_insertion_order(tmp_path: Path) -> None:
+    async def scenario():
+        store = SessionStore(tmp_path / "sessions.db")
+        session_id = uuid4()
+        first = _turn(tmp_path, "first").model_copy(update={"session_id": session_id})
+        second = _turn(tmp_path, "second").model_copy(update={"session_id": session_id})
+        await store.start_turn(first)
+        await store.start_turn(second)
+        await store.finish_turn(first.turn_id, "completed", answer="done")
+        return await store.list_turns(session_id)
+
+    turns = _run(scenario())
+
+    assert [turn.message for turn in turns] == ["first", "second"]
+    assert [turn.status for turn in turns] == ["completed", "running"]
