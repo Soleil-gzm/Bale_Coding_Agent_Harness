@@ -8,9 +8,11 @@ import typer
 
 from bale_harness.agent.approval import Decider, auto_approve
 from bale_harness.agent.checkpoint import ShadowGit
+from bale_harness.agent.cost import CostRates
 from bale_harness.agent.loop import AgentLoop, RunResult, build_default_loop
 from bale_harness.agent.messages import ToolCall, ToolSpec
 from bale_harness.agent.session import SessionStore, TurnRecord
+from bale_harness.agent.trace import JsonlTraceExporter
 from bale_harness.contracts import ApprovalMode, Turn
 from bale_harness.providers import create_provider
 from bale_harness.settings import Settings
@@ -44,6 +46,16 @@ async def _execute(
 async def _load_resumable(session: SessionStore, session_id: UUID) -> TurnRecord | None:
     await session.init()
     return await session.load_resumable_turn(session_id)
+
+
+def _cost_rates(settings: Settings) -> CostRates | None:
+    """Build cost rates only when both prices are configured."""
+    if settings.input_cost_per_1k is None or settings.output_cost_per_1k is None:
+        return None
+    return CostRates(
+        input_per_1k=settings.input_cost_per_1k,
+        output_per_1k=settings.output_cost_per_1k,
+    )
 
 
 @app.callback()
@@ -121,6 +133,10 @@ def run_command(
             help="Resume the latest unfinished turn in the given session",
         ),
     ] = False,
+    trace: Annotated[
+        str | None,
+        typer.Option(help="Append JSONL trace events to this file"),
+    ] = None,
 ) -> None:
     """Execute a ReAct run against the workspace."""
     if sandbox != "local":
@@ -147,6 +163,8 @@ def run_command(
     checkpoint = ShadowGit(workspace) if shadow_git else None
     approver: Decider = auto_approve if yes else _console_decider
     session = SessionStore(session_db) if session_db is not None else None
+    trace_path = trace or settings.trace_path
+    tracer = JsonlTraceExporter(trace_path) if trace_path else None
     loop = build_default_loop(
         provider,
         workspace,
@@ -155,6 +173,8 @@ def run_command(
         checkpoint=checkpoint,
         session=session,
         context_window=settings.context_window,
+        tracer=tracer,
+        cost_rates=_cost_rates(settings),
     )
 
     if resume:

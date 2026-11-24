@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     provider: Literal["fake", "openai"] = "fake"
     openai_api_key: SecretStr | None = None
     context_window: int = Field(default=128_000, gt=0)
+    trace_path: str | None = None
+    input_cost_per_1k: float | None = Field(default=None, ge=0)
+    output_cost_per_1k: float | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def validate_provider_credentials(self) -> Self:

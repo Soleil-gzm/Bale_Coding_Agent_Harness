@@ -141,3 +141,37 @@ def test_resume_rejects_message_flag(tmp_path: Path, monkeypatch) -> None:
     )
 
     assert result.exit_code != 0
+
+
+def test_run_writes_trace_file(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BALE_PROVIDER", "fake")
+    trace = tmp_path / "traces" / "run.jsonl"
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--message",
+            "inspect",
+            "--workspace",
+            str(tmp_path),
+            "--trace",
+            str(trace),
+            "--no-shadow-git",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["status"] == "completed"
+    assert data["duration_ms"] >= 0
+    assert data["estimated_cost"] is None
+
+    events = [
+        json.loads(line)
+        for line in trace.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert events[0]["event"] == "turn_started"
+    assert events[-1]["event"] == "turn_finished"
+    assert events[-1]["status"] == "completed"
