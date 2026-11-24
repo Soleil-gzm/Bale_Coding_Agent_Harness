@@ -10,12 +10,15 @@ When a :class:`ShadowGit` checkpoint is attached, each iteration is snapshotted
 and the final result carries the accumulated diff. When a :class:`SessionStore`
 is attached, messages, turn state, executed calls, and after-turn memory are
 persisted so an interrupted turn can be resumed without repeating side effects.
+When a retriever is attached, its excerpts are injected into the stable system
+prefix once per turn as untrusted workspace context.
 """
 
 import asyncio
 import time
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Protocol
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -48,6 +51,13 @@ from bale_harness.agent.tools.write import build_write_tools
 from bale_harness.agent.trace import TraceExporter
 from bale_harness.contracts import ApprovalMode, Turn
 from bale_harness.providers import ModelProvider
+
+
+class Retriever(Protocol):
+    """Supplies formatted workspace excerpts relevant to a turn message."""
+
+    def retrieve(self, query: str) -> Sequence[str]:
+        """Return the most relevant excerpts, best first."""
 
 
 class RunResult(BaseModel):
@@ -104,6 +114,7 @@ class AgentLoop:
         context_window: int = DEFAULT_CONTEXT_WINDOW,
         tracer: TraceExporter | None = None,
         cost_rates: CostRates | None = None,
+        retriever: Retriever | None = None,
     ) -> None:
         self._provider = provider
         self._registry = registry
@@ -112,6 +123,7 @@ class AgentLoop:
         self._context_window = context_window
         self._tracer = tracer
         self._cost_rates = cost_rates
+        self._retriever = retriever
         self._run_started: float | None = None
 
     async def run(
@@ -165,6 +177,7 @@ class AgentLoop:
             builder = ContextBuilder(
                 self._registry.list_specs(),
                 memory=await self._load_memory(turn),
+                workspace_context=await self._workspace_context(turn),
                 budget=TokenBudget(self._context_window),
             )
 
@@ -429,6 +442,15 @@ class AgentLoop:
             return []
         return await self._session.load_memory(turn.session_id)
 
+    async def _workspace_context(self, turn: Turn) -> Sequence[str]:
+        """Retrieve excerpts off the event loop; failures just skip context."""
+        if self._retriever is None:
+            return ()
+        try:
+            return await asyncio.to_thread(self._retriever.retrieve, turn.message)
+        except Exception:
+            return ()
+
     def _session_id(self, turn: Turn) -> UUID | None:
         return turn.session_id if self._session is not None else None
 
@@ -652,13 +674,15 @@ def build_default_loop(
     tracer: TraceExporter | None = None,
     cost_rates: CostRates | None = None,
     extra_tools: Sequence[Tool] | None = None,
+    retriever: Retriever | None = None,
 ) -> AgentLoop:
     """Construct a loop wired to the workspace tools.
 
     Read tools run freely. Write and execute tools require ``approver`` to
     approve each call; without one they are denied. ``extra_tools`` (for
     example MCP adapters) are registered after the built-ins and follow the
-    same governance.
+    same governance. A ``retriever`` supplies untrusted workspace excerpts for
+    the system prefix of each turn.
     """
     guard = WorkspaceGuard(workspace)
     registry = ToolRegistry(PolicyApprover(approval_mode, approver))
@@ -679,4 +703,5 @@ def build_default_loop(
         context_window=context_window,
         tracer=tracer,
         cost_rates=cost_rates,
+        retriever=retriever,
     )

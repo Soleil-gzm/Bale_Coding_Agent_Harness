@@ -34,7 +34,7 @@ from bale_harness.eval.report import render_markdown
 from bale_harness.eval.runner import EvalReport, run_tasks
 from bale_harness.eval.task import EvalTaskError, load_tasks, resolve_task_file
 from bale_harness.providers import create_provider
-from bale_harness.repo_index import Bm25Index
+from bale_harness.repo_index import Bm25Index, Bm25Retriever
 from bale_harness.settings import Settings
 from bale_harness.turns import TurnRequest, build_turn
 
@@ -385,6 +385,11 @@ def run_command(
     session = SessionStore(session_db) if session_db is not None else None
     trace_path = trace or settings.trace_path
     tracer = JsonlTraceExporter(trace_path) if trace_path else None
+    retriever = (
+        Bm25Retriever(workspace, top_k=settings.retrieval_top_k)
+        if settings.retrieval_enabled
+        else None
+    )
 
     if resume:
         assert session is not None
@@ -421,6 +426,7 @@ def run_command(
                 tracer=tracer,
                 cost_rates=_cost_rates(settings),
                 extra_tools=extra_tools,
+                retriever=retriever,
             )
             return await _execute(loop, turn, checkpoint, resume=resume)
 
@@ -672,6 +678,11 @@ def chat_command(
         else:
             checkpoint = ShadowGit(workspace)
     approver: Decider = auto_approve if yes else _console_decider
+    retriever = (
+        Bm25Retriever(workspace, top_k=settings.retrieval_top_k)
+        if settings.retrieval_enabled
+        else None
+    )
 
     async def _drive() -> None:
         """Keep one async context alive so MCP sessions span every turn."""
@@ -686,6 +697,7 @@ def chat_command(
                 context_window=settings.context_window,
                 cost_rates=_cost_rates(settings),
                 extra_tools=extra_tools,
+                retriever=retriever,
             )
             typer.echo(f"session {parsed_session_id} (type /exit to quit)")
             while True:

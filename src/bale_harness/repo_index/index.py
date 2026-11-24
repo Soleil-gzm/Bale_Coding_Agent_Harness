@@ -1,14 +1,19 @@
-"""In-memory BM25 index over line-window code chunks.
+"""In-memory BM25 index over code chunks.
 
 The index is intentionally dependency-free: no embedding model, vector store,
-or third-party ranker is required. Files are read once, split into overlapping
-line windows, tokenized, and scored with BM25 (``k1=1.5``, ``b=0.75``).
+or third-party ranker is required. Files are read once, split into chunks,
+tokenized, and scored with BM25 (``k1=1.5``, ``b=0.75``).
+
+Python files are chunked along top-level definitions (decorators included) so a
+hit usually points at one function or class; other files, and Python files with
+syntax errors, fall back to overlapping line windows.
 
 Scores only express relative lexical relevance for one query; they are not
 answer confidences. Hidden directories, common build/cache directories, binary
 files, unsupported extensions, and oversized files are skipped.
 """
 
+import ast
 import math
 from collections import Counter
 from collections.abc import Iterator
@@ -195,6 +200,70 @@ def _snippet(text: str) -> str:
     return text[:SNIPPET_CHARS].rstrip() + "\n..."
 
 
+PYTHON_SUFFIXES = frozenset({".py", ".pyi"})
+
+
+def _definition_ranges(tree: ast.Module) -> list[tuple[int, int]]:
+    """Return inclusive 1-based line ranges for top-level defs and classes."""
+    ranges: list[tuple[int, int]] = []
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        start = min(
+            [node.lineno, *(decorator.lineno for decorator in node.decorator_list)]
+        )
+        ranges.append((start, node.end_lineno or node.lineno))
+    return ranges
+
+
+def _chunk_python(text: str, path: str) -> list[CodeChunk]:
+    tree = ast.parse(text)
+    lines = text.splitlines()
+    chunks: list[CodeChunk] = []
+    cursor = 1
+    for start, end in _definition_ranges(tree):
+        if start > cursor:
+            chunks.append(_make_chunk(lines, cursor, start - 1, path))
+        chunks.append(_make_chunk(lines, start, end, path))
+        cursor = max(cursor, end + 1)
+    if cursor <= len(lines):
+        chunks.append(_make_chunk(lines, cursor, len(lines), path))
+    return [chunk for chunk in chunks if chunk is not None]
+
+
+def _make_chunk(
+    lines: list[str], start_line: int, end_line: int, path: str
+) -> CodeChunk | None:
+    start = start_line
+    end = end_line
+    while start <= end and not lines[start - 1].strip():
+        start += 1
+    while end >= start and not lines[end - 1].strip():
+        end -= 1
+    if start > end:
+        return None
+    return CodeChunk(
+        path=path,
+        start_line=start,
+        end_line=end,
+        text="\n".join(lines[start - 1 : end]),
+    )
+
+
+def chunk_source(text: str, path: str) -> list[CodeChunk]:
+    """Split source text into chunks, preferring Python definition boundaries.
+
+    Files that are not Python, or that fail to parse, fall back to
+    :func:`chunk_lines`.
+    """
+    if Path(path).suffix.lower() not in PYTHON_SUFFIXES:
+        return chunk_lines(text, path)
+    try:
+        return _chunk_python(text, path)
+    except (SyntaxError, ValueError):
+        return chunk_lines(text, path)
+
+
 class Bm25Index:
     """An immutable BM25 index over a fixed list of code chunks."""
 
@@ -233,7 +302,7 @@ class Bm25Index:
             if text is None:
                 continue
             file_count += 1
-            chunks.extend(chunk_lines(text, relative))
+            chunks.extend(chunk_source(text, relative))
             if len(chunks) >= MAX_CHUNKS:
                 break
         return cls(chunks[:MAX_CHUNKS], file_count=file_count)

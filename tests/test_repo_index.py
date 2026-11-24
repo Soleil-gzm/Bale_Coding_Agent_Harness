@@ -7,7 +7,13 @@ from typer.testing import CliRunner
 from bale_harness.agent.security import WorkspaceGuard
 from bale_harness.agent.tools.code_search import SearchCodeTool
 from bale_harness.cli import app
-from bale_harness.repo_index import Bm25Index, chunk_lines, iter_source_files, tokenize
+from bale_harness.repo_index import (
+    Bm25Index,
+    chunk_lines,
+    chunk_source,
+    iter_source_files,
+    tokenize,
+)
 
 runner = CliRunner()
 
@@ -62,6 +68,73 @@ def test_chunk_lines_uses_windows_with_overlap() -> None:
     assert chunks[0].end_line == 40
     assert chunks[1].start_line == 33
     assert chunks[-1].end_line == 100
+
+
+def test_chunk_source_splits_python_definitions_and_decorators() -> None:
+    text = (
+        '"""Module doc."""\n'
+        "import os\n"
+        "\n"
+        "@decorator\n"
+        "def first(value):\n"
+        "    return value\n"
+        "\n"
+        "class Second:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+    )
+
+    chunks = chunk_source(text, "example.py")
+
+    assert [(chunk.start_line, chunk.end_line) for chunk in chunks] == [
+        (1, 2),
+        (4, 6),
+        (8, 10),
+    ]
+    assert chunks[1].text.startswith("@decorator")
+    assert "class Second" in chunks[2].text
+
+
+def test_chunk_source_keeps_trailing_module_code() -> None:
+    text = "def run():\n    return 1\n\nif __name__ == '__main__':\n    run()\n"
+
+    chunks = chunk_source(text, "script.py")
+
+    assert [(chunk.start_line, chunk.end_line) for chunk in chunks] == [(1, 2), (4, 5)]
+
+
+def test_chunk_source_falls_back_on_syntax_errors() -> None:
+    body = [f"line {number}" for number in range(4, 101)]
+    text = "\n".join(["def broken(:", "    pass", "", *body])
+
+    chunks = chunk_source(text, "broken.py")
+
+    assert chunks[0].start_line == 1
+    assert chunks[0].end_line == 40
+    assert chunks[1].start_line == 33
+
+
+def test_chunk_source_uses_line_windows_for_non_python() -> None:
+    text = "\n".join(f"line {number}" for number in range(1, 101))
+
+    chunks = chunk_source(text, "notes.md")
+
+    assert chunks[0].end_line == 40
+    assert chunks[1].start_line == 33
+
+
+def test_index_chunks_python_functions_separately(tmp_path: Path) -> None:
+    (tmp_path / "mod.py").write_text(
+        "def alpha():\n    return 1\n\n\ndef beta():\n    return 2\n",
+        encoding="utf-8",
+    )
+
+    index = Bm25Index.from_directory(tmp_path)
+
+    assert index.chunk_count == 2
+    hits = index.search("beta")
+    assert hits[0].start_line == 5
+    assert hits[0].end_line == 6
 
 
 def test_index_skips_hidden_binary_and_unsupported_files(tmp_path: Path) -> None:

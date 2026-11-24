@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     output_cost_per_1k: float | None = Field(default=None, ge=0)
     http_api_key: SecretStr | None = None
     mcp_config: Path | None = None
+    retrieval_enabled: bool = True
+    retrieval_top_k: int = Field(default=5, ge=1, le=20)
 
     @model_validator(mode="after")
     def validate_provider_credentials(self) -> Self:

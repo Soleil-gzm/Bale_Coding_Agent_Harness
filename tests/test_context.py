@@ -54,3 +54,20 @@ def test_builder_raises_when_fixed_prefix_exceeds_window() -> None:
 
     with pytest.raises(ContextOverflowError):
         builder.build([ChatMessage(role="user", content="hi")])
+
+
+def test_workspace_context_is_rendered_as_untrusted_block() -> None:
+    excerpts = ["app.py:1-2\ndef main():\n    return 0"]
+
+    messages = build_initial_messages(_turn(), [], workspace_context=excerpts)
+
+    system = messages[0].content
+    assert "untrusted" in system
+    assert "app.py:1-2" in system
+    assert "def main" in system
+
+
+def test_workspace_context_is_absent_by_default() -> None:
+    messages = build_initial_messages(_turn(), [])
+
+    assert "Workspace excerpts" not in messages[0].content

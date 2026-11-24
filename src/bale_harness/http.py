@@ -41,6 +41,7 @@ from bale_harness.agent.trace import (
 )
 from bale_harness.contracts import ApprovalMode, Turn
 from bale_harness.providers import ModelProvider, create_provider
+from bale_harness.repo_index import Bm25Retriever
 from bale_harness.settings import Settings
 from bale_harness.turns import TurnRequest, build_turn
 
@@ -169,6 +170,11 @@ async def _execute(
     checkpoint = ShadowGit(request.workspace) if request.shadow_git else None
     if tracer is None and settings.trace_path:
         tracer = JsonlTraceExporter(settings.trace_path)
+    retriever = (
+        Bm25Retriever(request.workspace, top_k=settings.retrieval_top_k)
+        if settings.retrieval_enabled
+        else None
+    )
     loop = build_default_loop(
         provider,
         request.workspace,
@@ -179,6 +185,7 @@ async def _execute(
         tracer=tracer,
         cost_rates=_cost_rates(settings),
         extra_tools=extra_tools,
+        retriever=retriever,
     )
     try:
         return await loop.run(_build_turn(request), cancelled=cancel)
