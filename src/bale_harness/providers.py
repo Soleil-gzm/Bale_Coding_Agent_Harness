@@ -29,7 +29,7 @@ class FakeProvider:
     async def complete(
         self, messages: list[ChatMessage], tools: list[ToolSpec]
     ) -> ModelResponse:
-        self.calls.append((messages, tools))
+        self.calls.append((list(messages), tools))
         if self._responses:
             return self._responses.popleft()
         return self._default
