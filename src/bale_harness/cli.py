@@ -2,6 +2,7 @@ import asyncio
 import sys
 from pathlib import Path
 from typing import Annotated
+from uuid import UUID, uuid4
 
 import typer
 
@@ -9,6 +10,7 @@ from bale_harness.agent.approval import Decider, auto_approve
 from bale_harness.agent.checkpoint import ShadowGit
 from bale_harness.agent.loop import AgentLoop, RunResult, build_default_loop
 from bale_harness.agent.messages import ToolCall, ToolSpec
+from bale_harness.agent.session import SessionStore, TurnRecord
 from bale_harness.contracts import ApprovalMode, Turn
 from bale_harness.providers import create_provider
 from bale_harness.settings import Settings
@@ -26,13 +28,22 @@ def _console_decider(call: ToolCall, spec: ToolSpec) -> bool:
 
 
 async def _execute(
-    loop: AgentLoop, turn: Turn, checkpoint: ShadowGit | None
+    loop: AgentLoop,
+    turn: Turn,
+    checkpoint: ShadowGit | None,
+    *,
+    resume: bool = False,
 ) -> RunResult:
     try:
-        return await loop.run(turn)
+        return await loop.run(turn, resume=resume)
     finally:
         if checkpoint is not None:
             await checkpoint.cleanup()
+
+
+async def _load_resumable(session: SessionStore, session_id: UUID) -> TurnRecord | None:
+    await session.init()
+    return await session.load_resumable_turn(session_id)
 
 
 @app.callback()
@@ -65,7 +76,6 @@ def turn_command(
 
 @app.command("run")
 def run_command(
-    message: Annotated[str, typer.Option(..., help="Current user message")],
     workspace: Annotated[
         Path,
         typer.Option(
@@ -78,6 +88,7 @@ def run_command(
             help="Workspace directory to operate on",
         ),
     ],
+    message: Annotated[str | None, typer.Option(help="Current user message")] = None,
     token_budget: Annotated[int, typer.Option(min=1)] = 128000,
     max_iterations: Annotated[int, typer.Option(min=1, max=500)] = 20,
     repo_revision: Annotated[str | None, typer.Option()] = None,
@@ -96,32 +107,78 @@ def run_command(
             help="Snapshot the workspace in a private git directory",
         ),
     ] = True,
+    session_db: Annotated[
+        Path | None,
+        typer.Option(help="SQLite database used to persist session state"),
+    ] = None,
+    session_id: Annotated[
+        str | None, typer.Option(help="Session identifier (UUID)")
+    ] = None,
+    resume: Annotated[
+        bool,
+        typer.Option(
+            "--resume",
+            help="Resume the latest unfinished turn in the given session",
+        ),
+    ] = False,
 ) -> None:
     """Execute a ReAct run against the workspace."""
     if sandbox != "local":
         raise typer.BadParameter(
             f"unsupported sandbox {sandbox!r}; only 'local' is available"
         )
+    if resume:
+        if message is not None:
+            raise typer.BadParameter("--resume cannot be combined with --message")
+        if session_db is None or session_id is None:
+            raise typer.BadParameter(
+                "--resume requires both --session-db and --session-id"
+            )
+    elif message is None:
+        raise typer.BadParameter("--message is required unless --resume is used")
+
+    try:
+        parsed_session_id = UUID(session_id) if session_id else uuid4()
+    except ValueError as error:
+        raise typer.BadParameter(f"invalid session id: {session_id}") from error
 
     settings = Settings()
     provider = create_provider(settings)
     checkpoint = ShadowGit(workspace) if shadow_git else None
     approver: Decider = auto_approve if yes else _console_decider
+    session = SessionStore(session_db) if session_db is not None else None
     loop = build_default_loop(
         provider,
         workspace,
         approval_mode=approval_mode,
         approver=approver,
         checkpoint=checkpoint,
+        session=session,
+        context_window=settings.context_window,
     )
-    turn = Turn(
-        message=message,
-        workspace=workspace,
-        token_budget=token_budget,
-        max_iterations=max_iterations,
-        repo_revision=repo_revision,
-        approval_mode=approval_mode,
-    )
-    result: RunResult = asyncio.run(_execute(loop, turn, checkpoint))
+
+    if resume:
+        assert session is not None
+        record = asyncio.run(_load_resumable(session, parsed_session_id))
+        if record is None:
+            raise typer.BadParameter(
+                f"no unfinished turn for session {parsed_session_id}"
+            )
+        if Path(record.workspace) != workspace:
+            raise typer.BadParameter(f"session belongs to workspace {record.workspace}")
+        turn = record.to_turn()
+    else:
+        assert message is not None
+        turn = Turn(
+            message=message,
+            workspace=workspace,
+            session_id=parsed_session_id,
+            token_budget=token_budget,
+            max_iterations=max_iterations,
+            repo_revision=repo_revision,
+            approval_mode=approval_mode,
+        )
+
+    result: RunResult = asyncio.run(_execute(loop, turn, checkpoint, resume=resume))
     typer.echo(result.model_dump_json())
     raise typer.Exit(code=0 if result.status == "completed" else 1)

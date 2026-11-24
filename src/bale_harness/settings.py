@@ -1,6 +1,6 @@
 from typing import Literal, Self
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 OPENAI_KEY_REQUIRED = "BALE_OPENAI_API_KEY is required when BALE_PROVIDER=openai"
@@ -15,6 +15,7 @@ class Settings(BaseSettings):
 
     provider: Literal["fake", "openai"] = "fake"
     openai_api_key: SecretStr | None = None
+    context_window: int = Field(default=128_000, gt=0)
 
     @model_validator(mode="after")
     def validate_provider_credentials(self) -> Self:

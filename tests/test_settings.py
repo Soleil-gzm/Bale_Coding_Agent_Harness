@@ -19,6 +19,16 @@ def test_settings_reads_prefixed_environment(monkeypatch: pytest.MonkeyPatch) ->
     assert settings.provider == "fake"
 
 
+def test_context_window_defaults_and_reads_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert Settings(_env_file=None).context_window == 128_000
+
+    monkeypatch.setenv("BALE_CONTEXT_WINDOW", "4096")
+
+    assert Settings(_env_file=None).context_window == 4096
+
+
 @pytest.mark.parametrize("api_key", [None, "", "  \n\t"])
 def test_openai_provider_requires_nonblank_api_key(api_key: str | None) -> None:
     with pytest.raises(ValidationError, match=OPENAI_KEY_REQUIRED):
