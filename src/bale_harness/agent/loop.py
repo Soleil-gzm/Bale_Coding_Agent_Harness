@@ -13,6 +13,7 @@ persisted so an interrupted turn can be resumed without repeating side effects.
 """
 
 import asyncio
+import time
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -25,6 +26,7 @@ from bale_harness.agent.context import (
     ContextBuilder,
     TokenBudget,
 )
+from bale_harness.agent.cost import CostRates, estimate_cost
 from bale_harness.agent.history import estimate_message_tokens
 from bale_harness.agent.memory import curate_memory
 from bale_harness.agent.messages import (
@@ -42,6 +44,7 @@ from bale_harness.agent.tools.exec import build_exec_tools
 from bale_harness.agent.tools.git import build_git_tools
 from bale_harness.agent.tools.registry import ToolRegistry
 from bale_harness.agent.tools.write import build_write_tools
+from bale_harness.agent.trace import TraceExporter
 from bale_harness.contracts import ApprovalMode, Turn
 from bale_harness.providers import ModelProvider
 
@@ -62,6 +65,8 @@ class RunResult(BaseModel):
     checkpoints: list[str] = Field(default_factory=list)
     session_id: UUID | None = None
     resumed: bool = False
+    duration_ms: int = Field(default=0, ge=0)
+    estimated_cost: float | None = None
 
 
 def assign_call_ids(calls: list[ToolCall]) -> list[ToolCall]:
@@ -84,6 +89,10 @@ def _prompt_tokens(prompt: list[ChatMessage]) -> int:
     return sum(estimate_message_tokens(message) for message in prompt)
 
 
+def _duration_ms(start: float) -> int:
+    return max(0, int((time.perf_counter() - start) * 1000))
+
+
 class AgentLoop:
     def __init__(
         self,
@@ -92,12 +101,17 @@ class AgentLoop:
         checkpoint: ShadowGit | None = None,
         session: SessionStore | None = None,
         context_window: int = DEFAULT_CONTEXT_WINDOW,
+        tracer: TraceExporter | None = None,
+        cost_rates: CostRates | None = None,
     ) -> None:
         self._provider = provider
         self._registry = registry
         self._checkpoint = checkpoint
         self._session = session
         self._context_window = context_window
+        self._tracer = tracer
+        self._cost_rates = cost_rates
+        self._run_started: float | None = None
 
     async def run(
         self,
@@ -112,8 +126,10 @@ class AgentLoop:
         checkpoints: list[str] = []
         history: list[ChatMessage] = []
         resumed = False
+        self._run_started = time.perf_counter()
 
         try:
+            await self._start_trace(turn, resumed=resume)
             if self._checkpoint is not None:
                 await self._checkpoint.init()
             if self._session is not None:
@@ -161,6 +177,14 @@ class AgentLoop:
                         tool_calls=tool_calls,
                         usage=total_usage,
                     )
+                    await self._trace_finished(
+                        turn,
+                        status="cancelled",
+                        error="cancelled",
+                        iterations=iterations,
+                        tool_calls=tool_calls,
+                        usage=total_usage,
+                    )
                     return RunResult(
                         turn_id=turn.turn_id,
                         status="cancelled",
@@ -171,14 +195,15 @@ class AgentLoop:
                         checkpoints=checkpoints,
                         session_id=self._session_id(turn),
                         resumed=resumed,
+                        duration_ms=self._elapsed_ms(),
+                        estimated_cost=self._cost(total_usage),
                     )
 
                 iterations += 1
                 specs: list[ToolSpec] = self._registry.list_specs()
                 prompt = builder.build(history)
-                if total_usage.total_tokens + _prompt_tokens(prompt) > (
-                    turn.token_budget
-                ):
+                prompt_tokens = _prompt_tokens(prompt)
+                if total_usage.total_tokens + prompt_tokens > turn.token_budget:
                     return await self._failed(
                         turn,
                         "token budget exceeded",
@@ -188,7 +213,20 @@ class AgentLoop:
                         checkpoints,
                         resumed,
                     )
+                model_started = time.perf_counter()
                 response: ModelResponse = await self._provider.complete(prompt, specs)
+                model_duration = _duration_ms(model_started)
+                await self._emit(
+                    "model_call",
+                    iteration=iterations,
+                    duration_ms=model_duration,
+                    data={
+                        "prompt_tokens": prompt_tokens,
+                        "prompt_messages": len(prompt),
+                        "usage": response.usage.model_dump(mode="json"),
+                        "has_tool_calls": response.has_tool_calls,
+                    },
+                )
                 total_usage = _add_usage(total_usage, response.usage)
                 if total_usage.total_tokens > turn.token_budget:
                     return await self._failed(
@@ -234,6 +272,19 @@ class AgentLoop:
 
                 results = await self._registry.execute_batch(calls)
                 tool_calls += len(calls)
+                for call, result in zip(calls, results, strict=True):
+                    await self._emit(
+                        "tool_call",
+                        iteration=iterations,
+                        name=call.name,
+                        status=result.status,
+                        duration_ms=result.latency_ms,
+                        data={
+                            "call_id": call.call_id,
+                            "error_code": result.error_code,
+                            "truncated": result.truncated,
+                        },
+                    )
 
                 if self._checkpoint is not None:
                     snapshot = await self._checkpoint.snapshot(
@@ -241,6 +292,11 @@ class AgentLoop:
                     )
                     if snapshot is not None:
                         checkpoints.append(snapshot)
+                        await self._emit(
+                            "checkpoint",
+                            iteration=iterations,
+                            data={"snapshot": snapshot},
+                        )
 
                 tool_messages = [
                     ChatMessage(
@@ -288,6 +344,14 @@ class AgentLoop:
             await self._persist_status(
                 turn,
                 "cancelled",
+                error="cancelled",
+                iterations=iterations,
+                tool_calls=tool_calls,
+                usage=total_usage,
+            )
+            await self._trace_finished(
+                turn,
+                status="cancelled",
                 error="cancelled",
                 iterations=iterations,
                 tool_calls=tool_calls,
@@ -390,6 +454,14 @@ class AgentLoop:
                     usage=usage,
                 )
             except Exception as error:
+                await self._trace_finished(
+                    turn,
+                    status="failed",
+                    error=f"session write failed: {error}",
+                    iterations=iterations,
+                    tool_calls=tool_calls,
+                    usage=usage,
+                )
                 return RunResult(
                     turn_id=turn.turn_id,
                     status="failed",
@@ -400,9 +472,19 @@ class AgentLoop:
                     checkpoints=checkpoints,
                     session_id=self._session_id(turn),
                     resumed=resumed,
+                    duration_ms=self._elapsed_ms(),
+                    estimated_cost=self._cost(usage),
                 )
             await self._store_memory(turn, answer, None)
 
+        await self._trace_finished(
+            turn,
+            status="completed",
+            error=None,
+            iterations=iterations,
+            tool_calls=tool_calls,
+            usage=usage,
+        )
         return RunResult(
             turn_id=turn.turn_id,
             status="completed",
@@ -414,6 +496,8 @@ class AgentLoop:
             checkpoints=checkpoints,
             session_id=self._session_id(turn),
             resumed=resumed,
+            duration_ms=self._elapsed_ms(),
+            estimated_cost=self._cost(usage),
         )
 
     async def _failed(
@@ -434,6 +518,14 @@ class AgentLoop:
             tool_calls=tool_calls,
             usage=usage,
         )
+        await self._trace_finished(
+            turn,
+            status="failed",
+            error=error,
+            iterations=iterations,
+            tool_calls=tool_calls,
+            usage=usage,
+        )
         return RunResult(
             turn_id=turn.turn_id,
             status="failed",
@@ -444,6 +536,8 @@ class AgentLoop:
             checkpoints=checkpoints,
             session_id=self._session_id(turn),
             resumed=resumed,
+            duration_ms=self._elapsed_ms(),
+            estimated_cost=self._cost(usage),
         )
 
     async def _persist_status(
@@ -483,6 +577,58 @@ class AgentLoop:
         except Exception:
             return
 
+    async def _start_trace(self, turn: Turn, *, resumed: bool) -> None:
+        if self._tracer is None:
+            return
+        try:
+            await self._tracer.bind(turn)
+        except Exception:
+            self._tracer = None
+            return
+        await self._emit("turn_started", data={"resumed": resumed})
+
+    async def _emit(self, event: str, **fields: object) -> None:
+        if self._tracer is None:
+            return
+        try:
+            await self._tracer.emit(event, **fields)  # type: ignore[arg-type]
+        except Exception:
+            return
+
+    async def _trace_finished(
+        self,
+        turn: Turn,
+        *,
+        status: str,
+        error: str | None,
+        iterations: int,
+        tool_calls: int,
+        usage: Usage,
+    ) -> None:
+        await self._emit(
+            "turn_finished",
+            status=status,
+            iteration=iterations,
+            duration_ms=self._elapsed_ms(),
+            data={
+                "error": error,
+                "iterations": iterations,
+                "tool_calls": tool_calls,
+                "usage": usage.model_dump(mode="json"),
+                "estimated_cost": self._cost(usage),
+            },
+        )
+
+    def _elapsed_ms(self) -> int:
+        if self._run_started is None:
+            return 0
+        return _duration_ms(self._run_started)
+
+    def _cost(self, usage: Usage) -> float | None:
+        if self._cost_rates is None:
+            return None
+        return estimate_cost(usage, self._cost_rates)
+
     async def _diff(self) -> str | None:
         if self._checkpoint is None:
             return None
@@ -502,6 +648,8 @@ def build_default_loop(
     checkpoint: ShadowGit | None = None,
     session: SessionStore | None = None,
     context_window: int = DEFAULT_CONTEXT_WINDOW,
+    tracer: TraceExporter | None = None,
+    cost_rates: CostRates | None = None,
 ) -> AgentLoop:
     """Construct a loop wired to the workspace tools.
 
@@ -524,4 +672,6 @@ def build_default_loop(
         checkpoint=checkpoint,
         session=session,
         context_window=context_window,
+        tracer=tracer,
+        cost_rates=cost_rates,
     )
