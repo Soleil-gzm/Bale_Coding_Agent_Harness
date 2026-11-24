@@ -1,6 +1,6 @@
 # Bale Coding Agent Harness 快速启动指南
 
-本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时、B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、审批与 ShadowGit）、B3 上下文与会话运行时（Token 预算、历史裁剪、SQLite Session、取消恢复）、B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）、B5 运行报告（Session/Trace 到 Markdown）、B6 本地闭环增强（持久化 Checkpoint 与 `undo`、`session`/`trace` 检查、`chat` 多轮、扩展写入工具、OpenAI 兼容 Provider）、B7 HTTP 执行/SSE（`/v1/runs`、`/v1/runs/stream`）、B8 检索与评测（`search_code`/`bale search`、`bale eval`）、B9 MCP 工具接入（`bale run --mcp-config`）和 FastMCP 文件写入示例。Docker 容器隔离尚未实现；B2a 的本地执行只适用于受控开发场景。默认 Fake 配置不需要模型、数据库服务或容器服务。
+本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时、B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、审批与 ShadowGit）、B3 上下文与会话运行时（Token 预算、历史裁剪、SQLite Session、取消恢复）、B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）、B5 运行报告（Session/Trace 到 Markdown）、B6 本地闭环增强（持久化 Checkpoint 与 `undo`、`session`/`trace` 检查、`chat` 多轮、扩展写入工具、OpenAI 兼容 Provider）、B7 HTTP 执行/SSE 与生产化入口（`/v1/runs`、`/v1/runs/stream`、`/health`、Bearer 认证、按 `run_id` 取消）、B8 检索与评测（AST/行窗口 BM25、`search_code`/`bale search`、`bale eval`、自动上下文注入）、B9 MCP 工具接入（`bale run`/`bale chat`/HTTP）和 FastMCP 文件写入示例。Docker 容器隔离尚未实现；B2a 的本地执行只适用于受控开发场景。默认 Fake 配置不需要模型、数据库服务或容器服务。
 
 ## 1. 环境要求
 
@@ -70,6 +70,10 @@ cp .env.example .env
 | `BALE_TRACE_PATH` | 默认 JSONL 追踪文件；被 `--trace` 覆盖，留空则不写 |
 | `BALE_INPUT_COST_PER_1K` | 输入 token 每千价格；需与下一项同时配置 |
 | `BALE_OUTPUT_COST_PER_1K` | 输出 token 每千价格；未同时配置时不估算成本 |
+| `BALE_HTTP_API_KEY` | 设置后所有 `/v1` 路由要求 `Authorization: Bearer <key>`；`/health` 始终公开 |
+| `BALE_MCP_CONFIG` | HTTP 应用启动时加载的 MCP 服务器 JSON；损坏或缺失时拒绝启动 |
+| `BALE_RETRIEVAL_ENABLED` | 是否在每次 Turn 自动注入 BM25 检索片段，默认 `true` |
+| `BALE_RETRIEVAL_TOP_K` | 自动检索片段上限，默认 `5`，范围 1–20 |
 
 远程 `openai` 端点缺少有效 Key 时会在初始化阶段失败；`http://localhost`、`http://127.0.0.1` 等本地端点可免 Key。`.env` 已被 Git 忽略，不要提交真实密钥或打印完整 Settings。
 
@@ -239,6 +243,7 @@ bale chat \
 - 每行输入生成一个独立 Turn；跨 Turn 连续性来自 Session 的 `after_turn` 记忆摘要，不携带完整历史。
 - `--no-shadow-git` 可关闭快照；传 `--session-db` 时 Checkpoint 会持久化，可直接配合 `bale undo`。
 - 写/执行工具需要审批；非交互环境请使用 `--yes`，否则会被拒绝并回报给模型。
+- `--mcp-config` 可挂载 stdio MCP 工具，会话在整个 REPL 期间保持；自动检索默认开启，可用 `BALE_RETRIEVAL_ENABLED=false` 关闭。
 
 ### 4.7 检查 Session/Trace 与撤销改动
 
@@ -286,9 +291,11 @@ bale search --workspace "$PWD" --query "session resume" --json
 ```
 
 - 每次 CLI 调用都会重新扫描工作区；`search_code` 在单个工具实例内缓存索引。
-- 按 40 行窗口（8 行重叠）切块，标识符按 snake_case/camelCase 拆分后小写化，使用 BM25 排序。
+- Python 文件按顶层函数/类切块（装饰器归入所属定义），模块头、定义间语句与尾部代码各自成块；语法错误或非 Python 文件回退到行窗口。
+- 按 40 行窗口（8 行重叠）回退切块，标识符按 snake_case/camelCase 拆分后小写化，使用 BM25 排序。
 - 默认跳过隐藏目录、`__pycache__`/`node_modules`/`dist`/`build` 等目录、二进制文件、非文本后缀和超过 256 KiB 的文件；最多索引 2000 个文件。
 - 分数只表示词法相关性；`--limit` 取值为 1–50，`--path` 可限定子目录且不能逃逸工作区。
+- 默认开启自动检索：`bale run`/`bale chat`/HTTP 在 Turn 开始按用户消息检索，把 `path:start-end` 片段作为独立 untrusted 段落写入系统前缀；同 Turn 内前缀稳定，检索失败时跳过。环境变量 `BALE_RETRIEVAL_ENABLED=false` 可关闭，`BALE_RETRIEVAL_TOP_K` 控制条数。
 
 ### 4.10 固定任务评测
 
@@ -358,7 +365,7 @@ bale run --workspace "$PWD" --message "写一条 MCP 笔记" \
 - 每个工具对模型暴露为 `mcp_<server>_<tool>`；参数 schema 来自 MCP `inputSchema`，必填参数在本地先校验。
 - 工具默认按写副作用处理，必须审批或加 `--yes`；`read_only=true` 适合只读服务器，并允许并行批次。
 - MCP 协议错误返回 `mcp_error`，工具自身 `isError` 返回 `mcp_tool_error`；两者都会进入 `ToolResult`，不会中断循环。
-- 每次 `bale run` 重新建立会话，运行结束后关闭子进程；`bale chat` 与 HTTP 入口尚未接入 MCP 配置。
+- 每次 `bale run` 重新建立会话，运行结束后关闭子进程；`bale chat --mcp-config` 在整个交互期间复用同一会话，HTTP 入口通过 `BALE_MCP_CONFIG` 在应用 lifespan 内启动并复用，配置损坏时启动失败。
 - 手动验证最小服务端仍可使用第 6、7 节。
 
 ## 5. 使用 HTTP 创建与执行 Turn
@@ -400,6 +407,24 @@ curl -X POST http://127.0.0.1:8000/v1/runs \
 
 返回 HTTP 200 与 `RunResult`。`approve_writes` 默认 `false`，写/执行工具会被拒绝；HTTP 没有交互式审批，只有可信调用方才应设为 `true`。
 
+设置 `BALE_HTTP_API_KEY` 后，所有 `/v1` 请求都需要 `Authorization: Bearer <key>`，缺失或错误返回 401 与 `WWW-Authenticate: Bearer`；`/health` 始终公开：
+
+```bash
+curl http://127.0.0.1:8000/health
+curl -X POST http://127.0.0.1:8000/v1/runs \
+  -H "Authorization: Bearer $BALE_HTTP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Inspect the repository", "workspace": "/absolute/path/workspace", "shadow_git": false}'
+```
+
+`/v1/runs` 与 `/v1/runs/stream` 都返回 `X-Run-Id`。请求可自带 `run_id`（仅字母、数字、`.`、`_`、`-`）以便在运行中取消：
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/runs/inspect-1/cancel
+```
+
+取消是协作式的，在下一个迭代边界生效；未知或已结束的 `run_id` 返回 404，运行中复用相同 `run_id` 返回 409。设置 `BALE_MCP_CONFIG` 可让 HTTP 应用启动时挂载 MCP 工具；配置损坏时应用启动失败。
+
 以 SSE 流式观察同一 Turn：
 
 ```bash
@@ -412,9 +437,9 @@ curl -N -X POST http://127.0.0.1:8000/v1/runs/stream \
   }'
 ```
 
-事件顺序为若干 `event: trace`（`turn_started`、`model_call`、`tool_call`、`turn_finished` 等），最后是 `event: result`；执行异常会发送 `event: error`。客户端断开时服务端会取消执行。
+事件顺序为 `event: run`（携带 `run_id`）、若干 `event: trace`（`turn_started`、`model_call`、`tool_call`、`turn_finished` 等），最后是 `event: result`；执行异常会发送 `event: error`。客户端断开时服务端会取消执行。
 
-当前 HTTP 接口不支持 Session 持久化、认证、限流或 HTTP 审批流；`workspace` 由调用方指定，服务应只监听本机或可信内网。
+当前 HTTP 接口没有限流、Session 持久化或 HTTP 审批流；自动检索默认开启，每次请求按 `workspace` 惰性构建索引。`workspace` 由调用方指定，服务应只监听本机或可信内网。
 
 ## 6. 启动 MCP 服务端
 

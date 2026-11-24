@@ -4,7 +4,7 @@
 
 本文同时记录两类内容：
 
-- **当前实现**：B0 工程骨架、Turn/ToolResult 契约、Settings、ModelProvider/FakeProvider、共享 Turn 构造入口；B1 只读 ReAct 运行时（AgentLoop、ToolRegistry、只读内置工具、Workspace 路径防护与 `bale run` 入口）；B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、LocalSandbox、审批策略、ShadowGit 快照与调用幂等）；B3 上下文与会话运行时（Token 预算、历史裁剪、稳定系统前缀、SQLite Session、`after_turn` 记忆、取消与恢复）；B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）；B5 运行报告（Session/Trace 到 Markdown）；B6 本地闭环增强（持久化 Checkpoint 与 `bale undo`、`bale session`/`bale trace` 检查命令、`bale chat` 多轮交互、`move_file`/`delete_file`/`apply_patch`、OpenAI 兼容 Provider、`py.typed`）；B7 HTTP 执行与 SSE（`POST /v1/runs`、`POST /v1/runs/stream`）；以及可独立运行的 FastMCP 文件写入示例。
+- **当前实现**：B0 工程骨架、Turn/ToolResult 契约、Settings、ModelProvider/FakeProvider、共享 Turn 构造入口；B1 只读 ReAct 运行时（AgentLoop、ToolRegistry、只读内置工具、Workspace 路径防护与 `bale run` 入口）；B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、LocalSandbox、审批策略、ShadowGit 快照与调用幂等）；B3 上下文与会话运行时（Token 预算、历史裁剪、稳定系统前缀、SQLite Session、`after_turn` 记忆、取消与恢复）；B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）；B5 运行报告（Session/Trace 到 Markdown）；B6 本地闭环增强（持久化 Checkpoint 与 `bale undo`、`bale session`/`bale trace` 检查命令、`bale chat` 多轮交互、`move_file`/`delete_file`/`apply_patch`、OpenAI 兼容 Provider、`py.typed`）；B7 HTTP 执行与 SSE（`POST /v1/runs`、`POST /v1/runs/stream`），并补齐 `/health`、可选 Bearer 认证、`run_id` 指定与协作式取消；B8 检索与评测（AST/行窗口 BM25、`bale search`、`bale eval`）；B9 stdio MCP 工具适配，并在 `bale chat` 与 HTTP lifespan 内复用会话，`Bm25Retriever` 在每次 Turn 自动注入检索证据；以及可独立运行的 FastMCP 文件写入示例。
 - **目标架构**：Coding Agent Harness 的后续设计方向，用于约束模块边界和扩展方式。
 
 除特别注明外，带有“规划”“目标”或“后续”标识的模块均未在当前仓库实现。文档中的目标接口是逻辑契约，不代表已有 Python 类或稳定 API。
@@ -56,13 +56,13 @@ flowchart LR
 | `providers_openai.py` | OpenAI 兼容 Chat Completions：消息/工具编码、响应解析、429/5xx 退避、错误脱敏 | 非流式，仅标准库 `urllib` |
 | `turns.py` | 校验入口输入并统一构造 `created` Turn | 不创建 workspace，不执行 Turn |
 | `cli.py` | 将命令行参数转换为 TurnRequest 并输出 JSON | 初始化配置和 Provider，但不调用 `complete()` |
-| `http.py` | 应用工厂：`POST /v1/turns`、`POST /v1/runs`、`POST /v1/runs/stream` | 无认证、Session、HTTP 审批或健康检查 |
+| `http.py` | 应用工厂：`/health`、`POST /v1/turns`、`POST /v1/runs`、`POST /v1/runs/stream`、`POST /v1/runs/{run_id}/cancel` | 可选 Bearer 认证；无限流/HTTP Session/审批流；MCP 由 `BALE_MCP_CONFIG` 在 lifespan 内挂载 |
 
 CLI 和 HTTP 对相同输入生成相同的非 ID 字段；`turn_id` 和 `session_id` 分别随机生成。HTTP 环境在调用 `create_app()` 时加载，导入模块本身不读取环境。
 
 ### 3.2 B1 只读、B2a 写入、B3 上下文/会话与 B4 追踪/成本运行时
 
-B1 实现了最小 ReAct 闭环：模型请求工具调用 → 注册表治理执行 → 结果回注上下文 → 无工具调用时结束。B2a 在同一注册表上加入写入与执行工具：调用先经审批，`shell`/`run_tests` 交由 `LocalSandbox` 执行，每次迭代结束由 `ShadowGit` 在独立 git-dir 中快照，最终把 Diff 写入结果。B3 在循环外补充上下文与状态：每次模型调用前由 `ContextBuilder` 用稳定系统前缀、Session 记忆和裁剪后的历史重建提示；可选 `SessionStore` 以 SQLite 追加保存消息、Turn 状态、已执行调用和 `after_turn` 记忆，取消或中断后可按 Turn 恢复且不重复副作用。B4 在循环内埋点：`JsonlTraceExporter` 追加记录 `turn_started`、`model_call`、`tool_call`、`checkpoint` 与 `turn_finished`，`CostRates` 在配置费率后给出估算成本；追踪是 best-effort，写入失败不会改变 Turn 结果。B5 在循环外做只读投影：`build_report` 汇总 Session 中的 Turn、已执行调用、记忆与 Trace，生成 Markdown 报告，不调用模型、不写入 Session。B6 补全本地闭环：`--session-db`/`--checkpoint-dir` 让 ShadowGit git-dir 跨进程保留，复用已有 `HEAD` 作为基线，`bale undo` 按基线或指定快照恢复工作区；`bale session list/show` 与 `bale trace` 只读检查状态，`bale chat` 在单 Session 上循环 Turn；`providers_openai.OpenAICompatibleProvider` 以标准库 `urllib` 接入 OpenAI/DeepSeek/Ollama。B7 补齐 HTTP 执行：`POST /v1/runs` 同步执行并返回 `RunResult`，`POST /v1/runs/stream` 复用 Trace 事件，通过内存队列转成 SSE，最终发送 `result`；HTTP 路径不接 Session，默认无审批器（写入被拒绝），仅在 `approve_writes=true` 时使用 `auto_approve`。
+B1 实现了最小 ReAct 闭环：模型请求工具调用 → 注册表治理执行 → 结果回注上下文 → 无工具调用时结束。B2a 在同一注册表上加入写入与执行工具：调用先经审批，`shell`/`run_tests` 交由 `LocalSandbox` 执行，每次迭代结束由 `ShadowGit` 在独立 git-dir 中快照，最终把 Diff 写入结果。B3 在循环外补充上下文与状态：每次模型调用前由 `ContextBuilder` 用稳定系统前缀、Session 记忆和裁剪后的历史重建提示；可选 `SessionStore` 以 SQLite 追加保存消息、Turn 状态、已执行调用和 `after_turn` 记忆，取消或中断后可按 Turn 恢复且不重复副作用。B4 在循环内埋点：`JsonlTraceExporter` 追加记录 `turn_started`、`model_call`、`tool_call`、`checkpoint` 与 `turn_finished`，`CostRates` 在配置费率后给出估算成本；追踪是 best-effort，写入失败不会改变 Turn 结果。B5 在循环外做只读投影：`build_report` 汇总 Session 中的 Turn、已执行调用、记忆与 Trace，生成 Markdown 报告，不调用模型、不写入 Session。B6 补全本地闭环：`--session-db`/`--checkpoint-dir` 让 ShadowGit git-dir 跨进程保留，复用已有 `HEAD` 作为基线，`bale undo` 按基线或指定快照恢复工作区；`bale session list/show` 与 `bale trace` 只读检查状态，`bale chat` 在单 Session 上循环 Turn；`providers_openai.OpenAICompatibleProvider` 以标准库 `urllib` 接入 OpenAI/DeepSeek/Ollama。B7 补齐 HTTP 执行：`POST /v1/runs` 同步执行并返回 `RunResult`，`POST /v1/runs/stream` 复用 Trace 事件，通过内存队列转成 SSE，最终发送 `result`；HTTP 路径不接 Session，默认无审批器（写入被拒绝），仅在 `approve_writes=true` 时使用 `auto_approve`。HTTP 生产化补充：`GET /health` 公开，配置 `BALE_HTTP_API_KEY` 后所有 `/v1` 路由要求 `Authorization: Bearer`；调用方可自带 `run_id`，运行中的 Turn 通过 `POST /v1/runs/{run_id}/cancel` 在下一个迭代边界协作取消。B8 让 `repo_index.chunk_source` 优先按 Python 顶层定义切块，`Bm25Retriever` 在每次 Turn 开始按用户消息检索并格式化片段，经 `ContextBuilder` 作为独立的 untrusted 段落写入稳定系统前缀；检索异常时跳过上下文，不改变 Turn 结果。B9 让 `bale chat` 在整个 REPL 期间持有同一个 MCP 会话，HTTP 应用则在 lifespan 中启动并在关闭时回收 MCP 子进程。
 
 ```mermaid
 flowchart LR
@@ -97,13 +97,15 @@ flowchart LR
 | `agent/tools/exec.py` | `shell`、`run_tests`：拒绝 shell 元字符，交由 Sandbox 执行 | 执行副作用，需审批 |
 | `agent/tools/git.py` | `git_diff` 读取 ShadowGit 变更；`finish` 作为完成信号 | 均为只读 |
 | `agent/history.py` | 确定性 token 估算、按 user Turn 分组裁剪、tool 输出压缩、消息配对校验 | 只做纯函数变换 |
-| `agent/context.py` | `TokenBudget`、`ContextBuilder`：稳定系统前缀、记忆注入、预算与裁剪 | 不做检索装配 |
+| `agent/context.py` | `TokenBudget`、`ContextBuilder`：稳定系统前缀、记忆与检索片段注入、预算与裁剪 | 只接收已格式化片段，不主动检索 |
 | `agent/session.py` | `SessionStore`：SQLite 中的 Session、Turn、消息、已执行调用与记忆；写前意图、写后收敛 | 单机本地持久化，不提供多进程协调 |
 | `agent/memory.py` | `after_turn` fast curator：`Task/Outcome` 有界摘要 | 仅 completed 且 best-effort |
 | `agent/trace.py` | `TraceEvent`、`TraceExporter` 协议、`JsonlTraceExporter` 与 `NullTraceExporter`：追加写、序号递增、脱敏、失败不阻断 | 本地 JSONL，无轮转、采样或远程导出 |
 | `agent/cost.py` | `CostRates` 与 `estimate_cost`：按每千 token 费率估算成本 | 不内置默认价格，结果不是 Provider 账单 |
 | `agent/report.py` | `build_report`：Session、已执行调用、记忆与 Trace 汇总为 Markdown | 只读投影，不调用模型、不改 Session |
-| `agent/loop.py` | ReAct 循环、终止/取消/迭代与 token 预算、上下文重建、Session 持久化、恢复、Trace 埋点、耗时与成本与 Diff 聚合 | 无远程 Trace 导出 |
+| `agent/loop.py` | ReAct 循环、终止/取消/迭代与 token 预算、上下文重建、检索注入、Session 持久化、恢复、Trace 埋点、耗时与成本与 Diff 聚合 | 无远程 Trace 导出 |
+| `repo_index/index.py` | `chunk_source`：Python 顶层定义优先、行窗口回退；`Bm25Index` 与 `SearchHit` | 进程内索引，无持久化、增量更新或向量召回 |
+| `repo_index/retriever.py` | `Bm25Retriever`：懒加载索引，按 `top_k` 与字符上限生成 `path:start-end` 片段 | 同步实现，由 Loop 在线程中调用 |
 | `cli.py` `run` / `report` / `chat` / `session` / `trace` / `undo` | `run` 执行 Turn，支持 Session/Resume/Trace；`report` 输出 Markdown；`chat` 循环 Turn；`session`/`trace` 只读检查；`undo` 从 Checkpoint 恢复 | 退出码：`completed` 为 0，否则为 1 |
 
 `ModelProvider.complete` 已演进为接收消息列表与工具定义、返回结构化 `ModelResponse`；`FakeProvider` 支持脚本化响应队列，使循环测试完全离线且确定；`OpenAICompatibleProvider` 面向任意 OpenAI 兼容端点，测试通过注入 transport 完成，不访问网络。
@@ -165,11 +167,11 @@ sequenceDiagram
 
 `stdio` 同时承载协议消息，因此服务代码不应向标准输出写入普通日志。客户端应负责关闭会话并回收子进程。
 
-B9 的客户端实现位于 `agent/tools/mcp.py`：`mcp_tools(configs)` 是异步上下文管理器，负责启动服务、初始化 session、分页拉取工具，并在退出时按逆序关闭；每个工具以 `mcp_<server>_<tool>` 注册到同一个 ToolRegistry。工具默认按写副作用审批，只有配置 `read_only=true` 的服务器才作为只读工具参与并行执行；协议异常映射为 `mcp_error`，工具返回 `isError` 映射为 `mcp_tool_error`。
+B9 的客户端实现位于 `agent/tools/mcp.py`：`mcp_tools(configs)` 是异步上下文管理器，负责启动服务、初始化 session、分页拉取工具，并在退出时按逆序关闭；每个工具以 `mcp_<server>_<tool>` 注册到同一个 ToolRegistry。工具默认按写副作用审批，只有配置 `read_only=true` 的服务器才作为只读工具参与并行执行；协议异常映射为 `mcp_error`，工具返回 `isError` 映射为 `mcp_tool_error`。接入面包括 `bale run --mcp-config`（单次运行）、`bale chat --mcp-config`（REPL 全程复用会话）和 HTTP `BALE_MCP_CONFIG`（应用 lifespan 内复用，启动失败即拒绝启动）。
 
 ## 4. 目标系统分层架构
 
-当前已实现 CLI/HTTP 到 Turn 的构造路径，以及图中的 AgentLoop、ContextBuilder、HistoryTrimmer、ToolRegistry、Approval、Session 与 Checkpoint 的本地版本，并已有本地 JSONL Trace、成本估算、只读 Markdown 报告、BM25 检索、评测 harness 和 stdio MCP Tool Adapter。Knowledge Retriever、向量检索、HTTP 认证/审批与 Docker Sandbox 仍为后续设计，不是当前目录结构或已有能力。
+当前已实现 CLI/HTTP 到 Turn 的构造路径，以及图中的 AgentLoop、ContextBuilder、HistoryTrimmer、ToolRegistry、Approval、Session 与 Checkpoint 的本地版本，并已有本地 JSONL Trace、成本估算、只读 Markdown 报告、BM25 检索、评测 harness、stdio MCP Tool Adapter、HTTP Bearer 认证与运行取消，以及按 Turn 的检索注入。知识库 Retriever、向量/混合检索、HTTP 审批流与 Docker Sandbox 仍为后续设计，不是当前目录结构或已有能力。
 
 ```mermaid
 flowchart TB
@@ -229,13 +231,13 @@ flowchart TB
 | `agent/security.py` | 路径、能力、环境变量和不可信数据边界 | Workspace、Approval |
 | `agent/checkpoint.py` | 独立快照、撤销、恢复和幂等 | Git、Session |
 | `sandbox/` | 本地、容器和远程执行适配 | 统一 Sandbox 端口 |
-| `repo_index/` | 行窗口 BM25、分词和行号引用 | Retriever 端口 |
+| `repo_index/` | AST/行窗口 BM25、分词、检索与片段 | Retriever 端口 |
 | `providers/` | 真实模型调用、结构化输出和用量 | 当前 ModelProvider 端口 |
-| `server/` | HTTP 认证、Session、审批和健康检查 | Runtime、现有 `http.py` 执行入口 |
+| `server/` | HTTP Session、审批、限流和更多健康检查 | Runtime、现有 `http.py` 执行入口 |
 | `tracing/` | Span、错误、Token、延迟和成本 | 无 Runtime 反向依赖 |
 | `eval/` | 固定任务、确定性验证和报告 | CLI、Workspace、Verifier |
 
-这些路径用于说明职责边界。B1 已实现 `agent/loop.py`、`agent/context.py`（最小前缀）、`agent/tools/registry.py`、`agent/tools/builtin.py`（只读工具）和 `agent/security.py`；B2a 已实现 `agent/approval.py`、`agent/sandbox.py`（LocalSandbox）、`agent/checkpoint.py`（ShadowGit）、`agent/tools/write.py`、`agent/tools/exec.py` 与 `agent/tools/git.py`；B3 已实现 `agent/history.py`、完整的 `agent/context.py`、`agent/session.py` 与 `agent/memory.py`；B4 已实现 `agent/trace.py` 与 `agent/cost.py`；B5 已实现 `agent/report.py`；B6 已实现 `providers_openai.py`、Checkpoint 持久化/`undo`、`session`/`trace`/`chat` CLI 与扩展写入工具；B7 已实现 `http.py` 的执行与 SSE 端点；B8 已实现 `repo_index/`（行窗口 BM25 与 `search_code`/`bale search`）和 `eval/`（固定任务、确定性文件断言与 `bale eval`）；B9 已实现 `agent/tools/mcp.py`（stdio 连接、分页 `list_tools`、工具命名空间与 `call_tool` 适配，`bale run --mcp-config`）；其余模块（如 Knowledge Retriever、Docker sandbox、HTTP 认证/Session）仍为规划，不能当作已有能力。后续实现时应以实际代码和测试为准更新本文。
+这些路径用于说明职责边界。B1 已实现 `agent/loop.py`、`agent/context.py`（最小前缀）、`agent/tools/registry.py`、`agent/tools/builtin.py`（只读工具）和 `agent/security.py`；B2a 已实现 `agent/approval.py`、`agent/sandbox.py`（LocalSandbox）、`agent/checkpoint.py`（ShadowGit）、`agent/tools/write.py`、`agent/tools/exec.py` 与 `agent/tools/git.py`；B3 已实现 `agent/history.py`、完整的 `agent/context.py`、`agent/session.py` 与 `agent/memory.py`；B4 已实现 `agent/trace.py` 与 `agent/cost.py`；B5 已实现 `agent/report.py`；B6 已实现 `providers_openai.py`、Checkpoint 持久化/`undo`、`session`/`trace`/`chat` CLI 与扩展写入工具；B7 已实现 `http.py` 的执行、SSE、健康检查、Bearer 认证与 `run_id` 取消；B8 已实现 `repo_index/`（AST/行窗口 BM25、`Bm25Retriever` 自动注入与 `search_code`/`bale search`）和 `eval/`（固定任务、确定性文件断言与 `bale eval`）；B9 已实现 `agent/tools/mcp.py`（stdio 连接、分页 `list_tools`、工具命名空间与 `call_tool` 适配，`bale run`/`bale chat`/HTTP 接入）；其余模块（如 Knowledge Retriever、Docker sandbox、HTTP Session/审批/限流）仍为规划，不能当作已有能力。后续实现时应以实际代码和测试为准更新本文。
 
 ## 6. 核心逻辑契约
 
@@ -268,7 +270,7 @@ B1 已实现 `ToolSpec`（名称、描述、parameters、副作用类型、并�
 
 检索结果统一携带内容、相似度或排序分数、来源和元数据。代码检索还应提供路径、起止行号和 revision；知识库检索可提供 chunk/document 标识。分数不能直接解释为答案置信度。
 
-B8 的实际实现：`repo_index.SearchHit` 携带 `path`、`start_line`、`end_line`、`score` 和 `snippet`。索引按 40 行窗口（8 行重叠）切块，使用标准库 BM25（`k1=1.5`、`b=0.75`）对标识符分词结果排序；跳过隐藏目录、常见构建/缓存目录、二进制、非文本后缀和超过 256 KiB 的文件，单次最多索引 2000 个文件。索引只存在于 `search_code` 工具实例内，不持久化，也不返回 revision。
+B8 的实际实现：`repo_index.SearchHit` 携带 `path`、`start_line`、`end_line`、`score` 和 `snippet`。Python 文件按顶层函数/类切块（含装饰器），模块头、定义间语句和尾部代码各自成块；语法错误或非 Python 文件回退到 40 行窗口（8 行重叠）。索引使用标准库 BM25（`k1=1.5`、`b=0.75`）对标识符分词结果排序；跳过隐藏目录、常见构建/缓存目录、二进制、非文本后缀和超过 256 KiB 的文件，单次最多索引 2000 个文件。索引只存在于工具或 `Bm25Retriever` 实例内，不持久化，也不返回 revision。自动注入时，`Bm25Retriever` 按 `BALE_RETRIEVAL_TOP_K`（默认 5）取前若干片段，并以字符上限截断后交给 `ContextBuilder`。
 
 ## 7. 目标核心流程
 
@@ -316,6 +318,7 @@ B3 的实际实现：
 - `available_history` 使用上述公式并夹到零；固定前缀与当前 Turn 仍超窗时返回失败，不发送残缺请求。
 - `HistoryTrimmer` 先压缩超长 tool 输出（默认 4000 字符），再从最旧 Turn 整组丢弃，最新 Turn 始终保留。
 - `ContextBuilder` 的系统前缀在 Turn 内稳定，`after_turn` 记忆只在下个 Turn 注入。
+- 自动检索在 Turn 开始时执行一次：`Bm25Retriever` 按用户消息取片段，`ContextBuilder` 将其渲染为独立的 untrusted 段落；同一 Turn 的后续模型调用复用同一前缀。检索只依赖当前消息，不感知历史；字符预算与 `top_k` 由 `BALE_RETRIEVAL_*` 控制。
 - 恢复按 Session 中最新 `running`/`cancelled` Turn 进行，复用原始 user 消息；执行前写入 `pending` 意图，恢复时对缺失结果合成 `outcome_unknown` 而不重放。
 
 ## 8. 技术栈选型说明
@@ -332,7 +335,7 @@ B3 的实际实现：
 | MCP `stdio` | 本地进程集成简单、无需开放端口 | 客户端必须管理进程生命周期 |
 | pytest、Ruff、pip-tools | 离线测试、静态检查和可复现安装 | 本地通过不等于远程 CI 已运行 |
 | `sqlite3`（标准库） | B3 Session、消息、已执行调用与记忆持久化 | 单机文件数据库，不提供分布式协调 |
-| BM25（标准库实现） | B8 行窗口代码检索与 `search_code` | 无倒排持久化、增量更新或向量召回 |
+| BM25（标准库实现） | B8 代码检索、检索注入与 `search_code` | 无倒排持久化、增量更新或向量召回 |
 | 本地文本文件 | MCP 示例无需外部服务 | 不提供并发、权限或持久化保证 |
 
 ### 8.2 目标技术栈
@@ -392,7 +395,7 @@ B3 的实际实现：
 
 ## 11. 测试与验证设计
 
-当前 pytest 覆盖契约、配置、FakeProvider、CLI/HTTP 同构、输入校验，以及 B1 的消息契约、路径防护、工具注册器、只读内置工具、ReAct 循环和 CLI run 端到端，B2a 的审批策略、Sandbox 防护、ShadowGit 快照、写入/编辑与执行工具、幂等与「写代码→跑测试→finish」闭环，以及 B3 的 token 估算、预算非负、按 Turn 裁剪与消息配对、稳定前缀、SQLite Session 往返与事务回滚、`after_turn` 记忆、取消落库、Case C 恢复不重复写入和 CLI `--resume`，B4 的 JSONL 事件顺序、追加写入、脱敏与失败不阻断、成本估算和 `--trace`，B5 的 Session 列表顺序、Trace 回读、Markdown 报告内容与 `bale report`，B6 的 Session 汇总、Checkpoint 跨进程基线复用、`bale session`/`bale trace`/`bale chat`/`bale undo`、扩展写入工具、OpenAI 兼容 Provider 的请求映射/解析/重试/脱敏与本地端点免 Key 配置，以及 B8 的标识符分词、BM25 排序、隐藏/二进制文件过滤、`search_code`/`bale search`、任务文件校验、fixture 复制隔离、文件断言和 Markdown/JSON 评测报告，B9 的 MCP 配置校验、工具名与 `inputSchema` 映射、必填参数校验、写/只读治理、`mcp_error`/`mcp_tool_error` 归一化、stdio 往返和 `bale run --mcp-config`；MCP 示例可通过客户端执行初始化、`list_tools` 和 `call_tool`，并检查输出文件内容。基础检查命令为：
+当前 pytest 覆盖契约、配置、FakeProvider、CLI/HTTP 同构、输入校验，以及 B1 的消息契约、路径防护、工具注册器、只读内置工具、ReAct 循环和 CLI run 端到端，B2a 的审批策略、Sandbox 防护、ShadowGit 快照、写入/编辑与执行工具、幂等与「写代码→跑测试→finish」闭环，以及 B3 的 token 估算、预算非负、按 Turn 裁剪与消息配对、稳定前缀、SQLite Session 往返与事务回滚、`after_turn` 记忆、取消落库、Case C 恢复不重复写入和 CLI `--resume`，B4 的 JSONL 事件顺序、追加写入、脱敏与失败不阻断、成本估算和 `--trace`，B5 的 Session 列表顺序、Trace 回读、Markdown 报告内容与 `bale report`，B6 的 Session 汇总、Checkpoint 跨进程基线复用、`bale session`/`bale trace`/`bale chat`/`bale undo`、扩展写入工具、OpenAI 兼容 Provider 的请求映射/解析/重试/脱敏与本地端点免 Key 配置，以及 B8 的标识符分词、BM25 排序、隐藏/二进制文件过滤、`search_code`/`bale search`、任务文件校验、fixture 复制隔离、文件断言和 Markdown/JSON 评测报告，B9 的 MCP 配置校验、工具名与 `inputSchema` 映射、必填参数校验、写/只读治理、`mcp_error`/`mcp_tool_error` 归一化、stdio 往返和 `bale run --mcp-config`；MCP 示例可通过客户端执行初始化、`list_tools` 和 `call_tool`，并检查输出文件内容。HTTP 生产化覆盖 `/health` 公开性、Bearer 认证的 401/200、`X-Run-Id`、未知 `run_id` 取消 404、SSE 运行中取消与结果清理；MCP 接入覆盖 `bale chat` 跨 Turn 复用会话、HTTP lifespan 挂载与损坏配置启动失败；检索覆盖 AST 切块/装饰器/语法回退、`top_k` 与字符上限、`Bm25Retriever` 排序，以及 Loop 将片段注入系统前缀且检索失败不阻断 Turn。基础检查命令为：
 
 ```bash
 ruff check src tests
