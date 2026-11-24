@@ -1,6 +1,6 @@
 # Bale Coding Agent Harness 快速启动指南
 
-本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时、B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、审批与 ShadowGit）、B3 上下文与会话运行时（Token 预算、历史裁剪、SQLite Session、取消恢复）、B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）、B5 运行报告（Session/Trace 到 Markdown）、B6 本地闭环增强（持久化 Checkpoint 与 `undo`、`session`/`trace` 检查、`chat` 多轮、扩展写入工具、OpenAI 兼容 Provider）、B7 HTTP 执行/SSE（`/v1/runs`、`/v1/runs/stream`）和 FastMCP 文件写入示例。Docker 容器隔离尚未实现；B2a 的本地执行只适用于受控开发场景。默认 Fake 配置不需要模型、数据库服务或容器服务。
+本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时、B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、审批与 ShadowGit）、B3 上下文与会话运行时（Token 预算、历史裁剪、SQLite Session、取消恢复）、B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）、B5 运行报告（Session/Trace 到 Markdown）、B6 本地闭环增强（持久化 Checkpoint 与 `undo`、`session`/`trace` 检查、`chat` 多轮、扩展写入工具、OpenAI 兼容 Provider）、B7 HTTP 执行/SSE（`/v1/runs`、`/v1/runs/stream`）、B8 检索与评测（`search_code`/`bale search`、`bale eval`）和 FastMCP 文件写入示例。Docker 容器隔离尚未实现；B2a 的本地执行只适用于受控开发场景。默认 Fake 配置不需要模型、数据库服务或容器服务。
 
 ## 1. 环境要求
 
@@ -276,6 +276,58 @@ bale undo \
 
 三者均为写副作用，需要审批。
 
+### 4.9 代码检索
+
+B8 增加只读工具 `search_code` 与 CLI `bale search`，二者共享 `repo_index.Bm25Index`：
+
+```bash
+bale search --workspace "$PWD" --query "tool registry" --limit 5
+bale search --workspace "$PWD" --query "session resume" --json
+```
+
+- 每次 CLI 调用都会重新扫描工作区；`search_code` 在单个工具实例内缓存索引。
+- 按 40 行窗口（8 行重叠）切块，标识符按 snake_case/camelCase 拆分后小写化，使用 BM25 排序。
+- 默认跳过隐藏目录、`__pycache__`/`node_modules`/`dist`/`build` 等目录、二进制文件、非文本后缀和超过 256 KiB 的文件；最多索引 2000 个文件。
+- 分数只表示词法相关性；`--limit` 取值为 1–50，`--path` 可限定子目录且不能逃逸工作区。
+
+### 4.10 固定任务评测
+
+`bale eval` 读取 JSON 任务文件，把每个 `fixture` 复制到系统临时目录后执行一个完整 Turn，再验证文件断言：
+
+```bash
+bale eval \
+  --tasks examples/eval/tasks.json \
+  --output "$PWD/.bale/eval.md" \
+  --json "$PWD/.bale/eval.json"
+```
+
+任务格式：
+
+```json
+{
+  "tasks": [
+    {
+      "id": "greeting-message",
+      "description": "Change the greeting text.",
+      "fixture": "fixtures/greeting",
+      "message": "Update greet() to return a message starting with hello.",
+      "max_iterations": 6,
+      "checks": [
+        {"type": "file_exists", "path": "greetings.py"},
+        {"type": "file_contains", "path": "greetings.py", "value": "hello"}
+      ]
+    }
+  ]
+}
+```
+
+- `fixture` 相对任务文件所在目录解析；任务文件也可直接传目录（读取其中的 `tasks.json`）。
+- 支持 `file_exists`、`file_not_exists`、`file_contains`、`file_not_contains`；内容检查的 `value` 必须非空，存在性检查不接受 `value`。
+- 评测自动批准写与执行，fixture 必须视为可信输入；原始 fixture 不会被修改。
+- 每个任务使用独立的 Provider 实例；Markdown 默认写到标准输出，`--json` 额外写机器可读报告。
+- 任一任务 `failed` 或 `error` 时命令返回非零退出码。默认 `BALE_PROVIDER=fake` 只返回固定答案，通常无法满足断言；真实完成率需要配置 Ollama/DeepSeek 等 Provider。
+- 当前只做文件级确定性检查，不执行 fixture 内测试、不比较 Diff，也不包含 Docker 隔离。
+
 ## 5. 使用 HTTP 创建与执行 Turn
 
 启动应用工厂（默认读取项目根目录 `.env`）：
@@ -493,7 +545,7 @@ pytest -q
 python -m compileall examples
 ```
 
-测试覆盖契约、配置、FakeProvider、CLI/HTTP 同构、HTTP 输入校验、B1 只读运行时（消息契约、路径防护、工具注册器、只读工具、ReAct 循环、CLI run）、B2a 写入运行时（审批策略、Sandbox 防护、ShadowGit、写入/编辑、执行工具、幂等与端到端改码闭环）、B3 上下文与会话（预算非负、整 Turn 裁剪与配对、稳定前缀、SQLite 往返与事务回滚、记忆、取消恢复与不重复写入）、B4 追踪与成本（事件顺序、追加写入、脱敏、失败不阻断、成本估算）、B5 运行报告（Session 顺序、Trace 回读、报告内容、`--output`）、B6 本地闭环（Session 汇总、Checkpoint 跨进程基线、`session`/`trace`/`chat`/`undo`、扩展写入工具、OpenAI 兼容 Provider 映射/重试/脱敏、本地端点免 Key）和 B7 HTTP 执行/SSE（默认拒绝写入、显式审批后写入、SSE 事件顺序与 `result` 结束）以及 MCP 示例语法，不需要网络或 API Key。部分测试会在临时目录启动真实 pytest 子进程。仓库已配置 GitHub Actions，但远程结果应以 Actions 页面为准。
+测试覆盖契约、配置、FakeProvider、CLI/HTTP 同构、HTTP 输入校验、B1 只读运行时（消息契约、路径防护、工具注册器、只读工具、ReAct 循环、CLI run）、B2a 写入运行时（审批策略、Sandbox 防护、ShadowGit、写入/编辑、执行工具、幂等与端到端改码闭环）、B3 上下文与会话（预算非负、整 Turn 裁剪与配对、稳定前缀、SQLite 往返与事务回滚、记忆、取消恢复与不重复写入）、B4 追踪与成本（事件顺序、追加写入、脱敏、失败不阻断、成本估算）、B5 运行报告（Session 顺序、Trace 回读、报告内容、`--output`）、B6 本地闭环（Session 汇总、Checkpoint 跨进程基线、`session`/`trace`/`chat`/`undo`、扩展写入工具、OpenAI 兼容 Provider 映射/重试/脱敏、本地端点免 Key）和 B7 HTTP 执行/SSE（默认拒绝写入、显式审批后写入、SSE 事件顺序与 `result` 结束）、B8 检索与评测（分词、BM25 排序、隐藏/二进制过滤、`search_code`/`bale search`、任务校验、fixture 隔离、文件断言与 Markdown/JSON 报告）以及 MCP 示例语法，不需要网络或 API Key。部分测试会在临时目录启动真实 pytest 子进程。仓库已配置 GitHub Actions，但远程结果应以 Actions 页面为准。
 
 修改 MCP 示例后，重新执行第 7 节脚本，确认：
 

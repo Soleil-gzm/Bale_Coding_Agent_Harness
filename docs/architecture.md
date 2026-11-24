@@ -233,7 +233,7 @@ flowchart TB
 | `tracing/` | Span、错误、Token、延迟和成本 | 无 Runtime 反向依赖 |
 | `eval/` | 固定任务、确定性验证和报告 | CLI、Workspace、Verifier |
 
-这些路径用于说明职责边界。B1 已实现 `agent/loop.py`、`agent/context.py`（最小前缀）、`agent/tools/registry.py`、`agent/tools/builtin.py`（只读工具）和 `agent/security.py`；B2a 已实现 `agent/approval.py`、`agent/sandbox.py`（LocalSandbox）、`agent/checkpoint.py`（ShadowGit）、`agent/tools/write.py`、`agent/tools/exec.py` 与 `agent/tools/git.py`；B3 已实现 `agent/history.py`、完整的 `agent/context.py`、`agent/session.py` 与 `agent/memory.py`；B4 已实现 `agent/trace.py` 与 `agent/cost.py`；B5 已实现 `agent/report.py`；B6 已实现 `providers_openai.py`、Checkpoint 持久化/`undo`、`session`/`trace`/`chat` CLI 与扩展写入工具；B7 已实现 `http.py` 的执行与 SSE 端点；其余模块（如 `agent/tools/mcp.py`、`repo_index/`、`eval/`、Docker sandbox、HTTP 认证/Session）仍为规划，不能当作已有能力。后续实现时应以实际代码和测试为准更新本文。
+这些路径用于说明职责边界。B1 已实现 `agent/loop.py`、`agent/context.py`（最小前缀）、`agent/tools/registry.py`、`agent/tools/builtin.py`（只读工具）和 `agent/security.py`；B2a 已实现 `agent/approval.py`、`agent/sandbox.py`（LocalSandbox）、`agent/checkpoint.py`（ShadowGit）、`agent/tools/write.py`、`agent/tools/exec.py` 与 `agent/tools/git.py`；B3 已实现 `agent/history.py`、完整的 `agent/context.py`、`agent/session.py` 与 `agent/memory.py`；B4 已实现 `agent/trace.py` 与 `agent/cost.py`；B5 已实现 `agent/report.py`；B6 已实现 `providers_openai.py`、Checkpoint 持久化/`undo`、`session`/`trace`/`chat` CLI 与扩展写入工具；B7 已实现 `http.py` 的执行与 SSE 端点；B8 已实现 `repo_index/`（行窗口 BM25 与 `search_code`/`bale search`）和 `eval/`（固定任务、确定性文件断言与 `bale eval`）；其余模块（如 `agent/tools/mcp.py`、Docker sandbox、HTTP 认证/Session）仍为规划，不能当作已有能力。后续实现时应以实际代码和测试为准更新本文。
 
 ## 6. 核心逻辑契约
 
@@ -265,6 +265,8 @@ B1 已实现 `ToolSpec`（名称、描述、parameters、副作用类型、并�
 ### 6.3 SearchHit
 
 检索结果统一携带内容、相似度或排序分数、来源和元数据。代码检索还应提供路径、起止行号和 revision；知识库检索可提供 chunk/document 标识。分数不能直接解释为答案置信度。
+
+B8 的实际实现：`repo_index.SearchHit` 携带 `path`、`start_line`、`end_line`、`score` 和 `snippet`。索引按 40 行窗口（8 行重叠）切块，使用标准库 BM25（`k1=1.5`、`b=0.75`）对标识符分词结果排序；跳过隐藏目录、常见构建/缓存目录、二进制、非文本后缀和超过 256 KiB 的文件，单次最多索引 2000 个文件。索引只存在于 `search_code` 工具实例内，不持久化，也不返回 revision。
 
 ## 7. 目标核心流程
 
@@ -328,6 +330,7 @@ B3 的实际实现：
 | MCP `stdio` | 本地进程集成简单、无需开放端口 | 客户端必须管理进程生命周期 |
 | pytest、Ruff、pip-tools | 离线测试、静态检查和可复现安装 | 本地通过不等于远程 CI 已运行 |
 | `sqlite3`（标准库） | B3 Session、消息、已执行调用与记忆持久化 | 单机文件数据库，不提供分布式协调 |
+| BM25（标准库实现） | B8 行窗口代码检索与 `search_code` | 无倒排持久化、增量更新或向量召回 |
 | 本地文本文件 | MCP 示例无需外部服务 | 不提供并发、权限或持久化保证 |
 
 ### 8.2 目标技术栈
@@ -387,7 +390,7 @@ B3 的实际实现：
 
 ## 11. 测试与验证设计
 
-当前 pytest 覆盖契约、配置、FakeProvider、CLI/HTTP 同构、输入校验，以及 B1 的消息契约、路径防护、工具注册器、只读内置工具、ReAct 循环和 CLI run 端到端，B2a 的审批策略、Sandbox 防护、ShadowGit 快照、写入/编辑与执行工具、幂等与「写代码→跑测试→finish」闭环，以及 B3 的 token 估算、预算非负、按 Turn 裁剪与消息配对、稳定前缀、SQLite Session 往返与事务回滚、`after_turn` 记忆、取消落库、Case C 恢复不重复写入和 CLI `--resume`，B4 的 JSONL 事件顺序、追加写入、脱敏与失败不阻断、成本估算和 `--trace`，B5 的 Session 列表顺序、Trace 回读、Markdown 报告内容与 `bale report`，B6 的 Session 汇总、Checkpoint 跨进程基线复用、`bale session`/`bale trace`/`bale chat`/`bale undo`、扩展写入工具、OpenAI 兼容 Provider 的请求映射/解析/重试/脱敏与本地端点免 Key 配置；MCP 示例可通过客户端执行初始化、`list_tools` 和 `call_tool`，并检查输出文件内容。基础检查命令为：
+当前 pytest 覆盖契约、配置、FakeProvider、CLI/HTTP 同构、输入校验，以及 B1 的消息契约、路径防护、工具注册器、只读内置工具、ReAct 循环和 CLI run 端到端，B2a 的审批策略、Sandbox 防护、ShadowGit 快照、写入/编辑与执行工具、幂等与「写代码→跑测试→finish」闭环，以及 B3 的 token 估算、预算非负、按 Turn 裁剪与消息配对、稳定前缀、SQLite Session 往返与事务回滚、`after_turn` 记忆、取消落库、Case C 恢复不重复写入和 CLI `--resume`，B4 的 JSONL 事件顺序、追加写入、脱敏与失败不阻断、成本估算和 `--trace`，B5 的 Session 列表顺序、Trace 回读、Markdown 报告内容与 `bale report`，B6 的 Session 汇总、Checkpoint 跨进程基线复用、`bale session`/`bale trace`/`bale chat`/`bale undo`、扩展写入工具、OpenAI 兼容 Provider 的请求映射/解析/重试/脱敏与本地端点免 Key 配置，以及 B8 的标识符分词、BM25 排序、隐藏/二进制文件过滤、`search_code`/`bale search`、任务文件校验、fixture 复制隔离、文件断言和 Markdown/JSON 评测报告；MCP 示例可通过客户端执行初始化、`list_tools` 和 `call_tool`，并检查输出文件内容。基础检查命令为：
 
 ```bash
 ruff check src tests

@@ -2,7 +2,7 @@
 
 Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目标是将模型交互、工具治理、上下文管理、隔离执行、状态恢复和执行证据组织为可扩展的薄内核。
 
-**当前仓库处于早期建设阶段。** 已落地 B0 工程基础、B1 只读 ReAct 运行时、B2a 写入运行时、B3 上下文/会话运行时、B4 追踪/成本运行时、B5 运行报告、B6 本地闭环增强和 B7 HTTP 执行/SSE：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider 与 OpenAI 兼容 Provider、只创建 Turn 的 CLI/HTTP 入口，带审批、ShadowGit 快照和本地 Sandbox 的 `bale run`，Token 预算、历史裁剪、SQLite Session 与取消恢复，JSONL Trace 与可选成本估算，基于 Session/Trace 的 Markdown 报告，持久化 Checkpoint 与 `bale undo`，`bale chat` 多轮交互，`bale session`/`bale trace` 检查命令，`move_file`/`delete_file`/`apply_patch` 写入工具，以及执行 Turn 的 `POST /v1/runs` 与 SSE 流式 `POST /v1/runs/stream`。Docker 容器隔离、检索、HTTP 认证与 HTTP 审批流仍未实现。
+**当前仓库处于早期建设阶段。** 已落地 B0 工程基础、B1 只读 ReAct 运行时、B2a 写入运行时、B3 上下文/会话运行时、B4 追踪/成本运行时、B5 运行报告、B6 本地闭环增强、B7 HTTP 执行/SSE 和 B8 检索/评测：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider 与 OpenAI 兼容 Provider、只创建 Turn 的 CLI/HTTP 入口，带审批、ShadowGit 快照和本地 Sandbox 的 `bale run`，Token 预算、历史裁剪、SQLite Session 与取消恢复，JSONL Trace 与可选成本估算，基于 Session/Trace 的 Markdown 报告，持久化 Checkpoint 与 `bale undo`，`bale chat` 多轮交互，`bale session`/`bale trace` 检查命令，`move_file`/`delete_file`/`apply_patch` 写入工具，执行 Turn 的 `POST /v1/runs` 与 SSE 流式 `POST /v1/runs/stream`，以及 BM25 代码检索（`search_code`、`bale search`）与固定任务评测（`bale eval`）。Docker 容器隔离、向量检索、HTTP 认证与 HTTP 审批流仍未实现。
 
 ## 当前功能
 
@@ -46,6 +46,13 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - `POST /v1/runs/stream` 返回 `text/event-stream`：先逐条发送 `event: trace`，结束时发送 `event: result`；执行异常发送 `event: error`。
 - 两者都不使用 SQLite Session、不提供 HTTP 审批流；`approve_writes=true` 表示调用方已自行确认风险，应仅在本机或内网使用。
 
+### 代码检索与评测
+
+- `search_code` 在首次调用时扫描工作区（跳过隐藏目录、构建/缓存目录、二进制与超大文件），按 40 行窗口切块并用标准库 BM25 排序，返回 `path:start-end`、分数与片段；索引只在工具实例内缓存，不写磁盘。
+- `bale search --workspace ... --query ...` 提供同一检索的 CLI 入口，`--limit` 限制命中数，`--json` 输出机器可读结果。
+- `bale eval --tasks examples/eval/tasks.json` 读取固定 JSON 任务，把每个 fixture 复制到临时工作区后运行完整 ReAct 闭环，再用 `file_exists`、`file_not_exists`、`file_contains`、`file_not_contains` 做确定性验证。
+- 评测默认自动批准写与执行（fixture 视为可信）；`--output` 写 Markdown，`--json` 写 JSON，存在失败或错误时命令以非零状态退出，可用于 CI。
+
 ### 运行报告
 
 - `bale report` 读取 SQLite Session 与可选 JSONL Trace，生成只读 Markdown 报告：会话概要、每个 Turn 的状态/用量/任务与答案、工具调用表、Trace 事件计数和记忆摘要。
@@ -81,7 +88,7 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - Checkpoint 目录已可持久化并支持 `bale undo`，但没有快照浏览/清理命令，也依赖本机 `git`。
 - Trace 为本地追加 JSONL，无轮转、采样或远程导出；`estimated_cost` 只是按配置费率的估算，不代表 Provider 账单。
 - 运行报告是只读 Markdown 投影，只提供 CLI 入口，不包含 HTML/PDF 导出或 HTTP 报告接口。
-- 不包含检索（BM25/向量）或评测 harness。
+- 检索仅支持无第三方依赖的行窗口 BM25 词法排序，不包含 AST 结构化切块、向量/混合检索、增量更新或持久化索引；评测只执行 JSON 固定任务与文件级断言，不包含 Docker 隔离、自动生成任务或模型评分。
 - HTTP 接口没有认证、限流、Session 或交互式审批；默认拒绝写入，`approve_writes=true` 只应由可信调用方使用。
 - `bale chat` 的跨 Turn 连续性依赖 Session 记忆摘要，不携带完整历史，也不会自动压缩超长对话。
 - 审批只在 CLI 中提供交互确认与 `--yes`，没有 HTTP 审批流。
@@ -104,6 +111,7 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 | 上下文与会话 | ContextBuilder、HistoryTrimmer、SessionStore | Token 预算、整 Turn 裁剪与 SQLite 持久化 |
 | 观测 | JsonlTraceExporter、CostRates | 追加式 JSONL 事件与可选成本估算 |
 | 报告 | build_report、bale report | 从 Session/Trace 生成只读 Markdown |
+| 检索与评测 | Bm25Index、EvalTask/EvalReport | 标准库 BM25、临时工作区与确定性文件断言 |
 | 工具协议 | Model Context Protocol | MCP 示例使用 `stdio` transport |
 | SDK | `mcp==1.30.0` | 使用 `mcp.server.fastmcp.FastMCP` |
 | 测试与检查 | pytest、Ruff、pip-tools | 离线测试、静态检查与哈希锁文件 |
@@ -120,8 +128,10 @@ Bale_Coding_Agent_Harness/
 │   ├── providers_openai.py   # OpenAI 兼容 Provider（DeepSeek/Ollama）
 │   ├── py.typed              # PEP 561 类型标记
 │   ├── turns.py              # TurnRequest 与共享 build_turn()
-│   ├── cli.py                # bale turn/run/chat/report/session/trace/undo
+│   ├── cli.py                # bale turn/search/eval/run/chat/report/session/trace/undo
 │   ├── http.py               # /v1/turns、/v1/runs、/v1/runs/stream
+│   ├── repo_index/           # BM25 分词、行窗口切块与检索
+│   ├── eval/                 # 固定任务、运行器与 Markdown/JSON 报告
 │   └── agent/                # ReAct 运行时
 │       ├── messages.py       # 运行时消息与工具契约
 │       ├── security.py       # WorkspaceGuard 路径防护
@@ -138,6 +148,9 @@ Bale_Coding_Agent_Harness/
 │       ├── loop.py           # AgentLoop 与 RunResult
 │       └── tools/            # registry、内置/写入/执行/git 工具
 ├── tests/                    # 契约、配置、入口与运行时测试
+├── examples/eval/
+│   ├── tasks.json            # 示例评测任务
+│   └── fixtures/             # 任务工作区模板
 ├── examples/mcp/
 │   └── write_server.py       # 独立 FastMCP 服务端示例
 ├── docs/
@@ -236,6 +249,21 @@ bale session show --session-db "$PWD/.bale/sessions.db" --session-id 6f1c1f6e-2e
 bale trace --trace "$PWD/.bale/trace.jsonl" --limit 5
 bale undo --workspace "$PWD" --session-id 6f1c1f6e-2e0e-4d0e-9d1e-2f7f1a9b8c11 \
   --session-db "$PWD/.bale/sessions.db" --yes
+```
+
+检索工作区代码（BM25 词法排序，不写磁盘）：
+
+```bash
+bale search --workspace "$PWD" --query "tool registry" --limit 5
+```
+
+运行示例评测任务（FakeProvider 下会因未修改文件而失败，连接真实模型才有参考价值）：
+
+```bash
+bale eval \
+  --tasks examples/eval/tasks.json \
+  --output "$PWD/.bale/eval.md" \
+  --json "$PWD/.bale/eval.json"
 ```
 
 使用 DeepSeek 或本地 Ollama 作为真实 Provider：
