@@ -3,7 +3,12 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
-from bale_harness.agent.trace import JsonlTraceExporter, NullTraceExporter, TraceEvent
+from bale_harness.agent.trace import (
+    JsonlTraceExporter,
+    NullTraceExporter,
+    TraceEvent,
+    read_trace,
+)
 from bale_harness.contracts import Turn
 
 
@@ -146,3 +151,26 @@ def test_null_exporter_writes_nothing(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
     assert list(tmp_path.iterdir()) == []
+
+
+def test_read_trace_round_trips_and_skips_bad_lines(tmp_path: Path) -> None:
+    path = tmp_path / "trace.jsonl"
+    turn = _turn(tmp_path)
+
+    async def scenario() -> None:
+        exporter = JsonlTraceExporter(path)
+        await exporter.bind(turn)
+        await exporter.emit("turn_started")
+        await exporter.emit("turn_finished", status="completed")
+
+    asyncio.run(scenario())
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write("not json\n\n")
+
+    events = read_trace(path)
+
+    assert [event.event for event in events] == ["turn_started", "turn_finished"]
+
+
+def test_read_trace_returns_empty_for_missing_file(tmp_path: Path) -> None:
+    assert read_trace(tmp_path / "missing.jsonl") == []

@@ -137,3 +137,22 @@ class JsonlTraceExporter:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(line)
+
+
+def read_trace(path: str | Path) -> list[TraceEvent]:
+    """Read a JSONL trace, skipping blank or malformed lines.
+
+    A missing file yields an empty list so reports can run without a trace.
+    """
+    file = Path(path)
+    if not file.exists():
+        return []
+    events: list[TraceEvent] = []
+    for line in file.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            events.append(TraceEvent.model_validate_json(line))
+        except Exception:  # partial or corrupt lines are ignored
+            continue
+    return events
