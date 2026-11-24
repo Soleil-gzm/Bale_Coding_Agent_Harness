@@ -4,7 +4,7 @@
 
 本文同时记录两类内容：
 
-- **当前实现**：B0 工程骨架、Turn/ToolResult 契约、Settings、ModelProvider/FakeProvider、共享 Turn 构造入口；B1 只读 ReAct 运行时（AgentLoop、ToolRegistry、只读内置工具、Workspace 路径防护与 `bale run` 入口）；以及可独立运行的 FastMCP 文件写入示例。
+- **当前实现**：B0 工程骨架、Turn/ToolResult 契约、Settings、ModelProvider/FakeProvider、共享 Turn 构造入口；B1 只读 ReAct 运行时（AgentLoop、ToolRegistry、只读内置工具、Workspace 路径防护与 `bale run` 入口）；B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、LocalSandbox、审批策略、ShadowGit 快照与调用幂等）；以及可独立运行的 FastMCP 文件写入示例。
 - **目标架构**：Coding Agent Harness 的后续设计方向，用于约束模块边界和扩展方式。
 
 除特别注明外，带有“规划”“目标”或“后续”标识的模块均未在当前仓库实现。文档中的目标接口是逻辑契约，不代表已有 Python 类或稳定 API。
@@ -31,7 +31,7 @@
 
 ### 2.2 当前非目标
 
-当前实现不提供真实模型调用、写入/编辑工具、Shell 与测试执行、多模型路由、多智能体调度、Web 前端、权限系统、持久化或生产级隔离。B1 已提供只读 Turn 执行；后续实现也应避免在缺少证据时将上述未实现能力视为已经具备。
+当前实现不提供真实模型调用、Docker 容器隔离、多模型路由、多智能体调度、Web 前端、HTTP 审批流、Session/Resume 持久化或生产级隔离。B1 已提供只读 Turn 执行，B2a 已提供受审的本地写入与命令执行；后续实现也应避免在缺少证据时将上述未实现能力视为已经具备。`LocalSandbox` 只是受控开发环境的防护层，不是不可信代码的安全边界。
 
 ## 3. 当前实现架构
 
@@ -59,31 +59,41 @@ flowchart LR
 
 CLI 和 HTTP 对相同输入生成相同的非 ID 字段；`turn_id` 和 `session_id` 分别随机生成。HTTP 环境在调用 `create_app()` 时加载，导入模块本身不读取环境。
 
-### 3.2 B1 只读运行时
+### 3.2 B1 只读运行时与 B2a 写入运行时
 
-B1 在 B0 契约之上实现了最小只读 ReAct 闭环：模型请求工具调用 → 注册表治理执行 → 结果回注上下文 → 无工具调用时结束。当前仅注册只读工具，写入、Shell 与测试执行工具留待后续里程碑。
+B1 实现了最小 ReAct 闭环：模型请求工具调用 → 注册表治理执行 → 结果回注上下文 → 无工具调用时结束。B2a 在同一注册表上加入写入与执行工具：调用先经审批，`shell`/`run_tests` 交由 `LocalSandbox` 执行，每次迭代结束由 `ShadowGit` 在独立 git-dir 中快照，最终把 Diff 写入结果。
 
 ```mermaid
 flowchart LR
     CLI[bale run] --> Loop[AgentLoop]
     Loop --> Provider[ModelProvider]
-    Provider -->|ModelResponse| Loop
     Loop --> Registry[ToolRegistry]
-    Registry --> Guard[WorkspaceGuard]
-    Registry --> Builtin[read-only builtin tools]
-    Builtin --> Guard
+    Registry --> Approval[PolicyApprover]
+    Registry --> Tools[Built-in tools]
+    Tools --> Guard[WorkspaceGuard]
+    Tools --> Sandbox[LocalSandbox]
+    Tools --> Shadow[ShadowGit]
+    Loop -->|per-iteration snapshot| Shadow
     Loop --> Result[RunResult JSON]
 ```
+
+审批语义：`auto_read` 只读放行、写/执行拒绝；`approve_write` 只读放行、写/执行需审批；`approve_all` 全部需审批。没有审批人时写/执行一律 `denied`，拒绝结果会回注模型而不是终止循环。`call_id` 对写/执行工具做幂等缓存，重复调用不会产生第二次副作用。
 
 | 当前模块 | 职责 | 边界 |
 |---|---|---|
 | `agent/messages.py` | 运行时消息、工具调用、模型响应、用量与 ToolSpec 数据契约 | 仅描述数据，不执行 |
 | `agent/security.py` | `WorkspaceGuard`：路径规范化、`..` 逃逸与符号链接逃逸防护 | 只读，不创建工作区 |
-| `agent/tools/registry.py` | `Tool` 协议与 `ToolRegistry`：注册、参数校验、超时、错误归一化、只读并发 | B1 仅接受 `side_effect=read` 的工具 |
+| `agent/tools/registry.py` | `Tool` 协议与 `ToolRegistry`：注册、参数校验、审批、调用幂等、超时、错误归一化、只读并发 | 写/执行工具无审批人时一律拒绝 |
 | `agent/tools/builtin.py` | `read_file`、`list_files`、`search_files`，输出有界 | 全部只读且并发安全 |
+| `agent/approval.py` | `PolicyApprover`：按 `auto_read`/`approve_write`/`approve_all` 判定，缺省拒绝 | 只做决策，不负责交互或持久化 |
+| `agent/sandbox.py` | `Sandbox` 端口与 `LocalSandbox`：argv 执行、命令 deny-list、环境变量白名单、cwd 限定、超时与输出截断 | 非安全边界，Docker 适配待 B2b |
+| `agent/checkpoint.py` | `ShadowGit`：独立 git-dir 的基线快照、逐迭代快照、diff 与恢复 | 不读写用户 `.git` |
+| `agent/tools/write.py` | `write_file`、`edit_file`：原子写与精确匹配前置校验 | 写副作用，需审批 |
+| `agent/tools/exec.py` | `shell`、`run_tests`：拒绝 shell 元字符，交由 Sandbox 执行 | 执行副作用，需审批 |
+| `agent/tools/git.py` | `git_diff` 读取 ShadowGit 变更；`finish` 作为完成信号 | 均为只读 |
 | `agent/context.py` | 装配系统前缀与当前用户消息 | 历史裁剪与检索装配留待后续 |
-| `agent/loop.py` | ReAct 循环、终止/取消/迭代预算、调用 ID、用量聚合，返回 `RunResult` | 无 Checkpoint、Session 或 Trace 持久化 |
-| `cli.py` `run` | 构造 Turn 并执行只读循环，输出 `RunResult` JSON | 退出码：`completed` 为 0，否则为 1 |
+| `agent/loop.py` | ReAct 循环、终止/取消/迭代预算、调用 ID、逐迭代快照、用量与 Diff 聚合 | 无 Session/Resume 或 Trace 持久化 |
+| `cli.py` `run` | 构造 Turn 并执行循环，输出 `RunResult` JSON | 退出码：`completed` 为 0，否则为 1 |
 
 `ModelProvider.complete` 已演进为接收消息列表与工具定义、返回结构化 `ModelResponse`；`FakeProvider` 支持脚本化响应队列，使循环测试完全离线且确定。真实 OpenAI Provider 仍未实现。
 
@@ -212,7 +222,7 @@ flowchart TB
 | `tracing/` | Span、错误、Token、延迟和成本 | 无 Runtime 反向依赖 |
 | `eval/` | 固定任务、确定性验证和报告 | CLI、Workspace、Verifier |
 
-这些路径用于说明职责边界。B1 已实现 `agent/loop.py`、`agent/context.py`（最小前缀）、`agent/tools/registry.py`、`agent/tools/builtin.py`（只读工具）和 `agent/security.py`；其余模块仍为规划，不能当作已有能力。后续实现时应以实际代码和测试为准更新本文。
+这些路径用于说明职责边界。B1 已实现 `agent/loop.py`、`agent/context.py`（最小前缀）、`agent/tools/registry.py`、`agent/tools/builtin.py`（只读工具）和 `agent/security.py`；B2a 已实现 `agent/approval.py`、`agent/sandbox.py`（LocalSandbox）、`agent/checkpoint.py`（ShadowGit）、`agent/tools/write.py`、`agent/tools/exec.py` 与 `agent/tools/git.py`；其余模块仍为规划，不能当作已有能力。后续实现时应以实际代码和测试为准更新本文。
 
 ## 6. 核心逻辑契约
 
@@ -356,7 +366,7 @@ available_history = context_window
 
 ## 11. 测试与验证设计
 
-当前 pytest 覆盖契约、配置、FakeProvider、CLI/HTTP 同构、输入校验，以及 B1 的消息契约、路径防护、工具注册器、只读内置工具、ReAct 循环和 CLI run 端到端；MCP 示例可通过客户端执行初始化、`list_tools` 和 `call_tool`，并检查输出文件内容。基础检查命令为：
+当前 pytest 覆盖契约、配置、FakeProvider、CLI/HTTP 同构、输入校验，以及 B1 的消息契约、路径防护、工具注册器、只读内置工具、ReAct 循环和 CLI run 端到端，和 B2a 的审批策略、Sandbox 防护、ShadowGit 快照、写入/编辑与执行工具、幂等与「写代码→跑测试→finish」闭环；MCP 示例可通过客户端执行初始化、`list_tools` 和 `call_tool`，并检查输出文件内容。基础检查命令为：
 
 ```bash
 ruff check src tests

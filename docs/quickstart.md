@@ -1,6 +1,6 @@
 # Bale Coding Agent Harness 快速启动指南
 
-本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时（`bale run`）和 FastMCP 文件写入示例。B1 已支持只读 Turn 执行；真实 OpenAIProvider、写入工具和完整 Agent Runtime 尚未实现。默认 Fake 配置不需要模型、数据库或容器服务。
+本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时、B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、审批与 ShadowGit）和 FastMCP 文件写入示例。真实 OpenAIProvider 与 Docker 容器隔离尚未实现；B2a 的本地执行只适用于受控开发场景。默认 Fake 配置不需要模型、数据库或容器服务。
 
 ## 1. 环境要求
 
@@ -98,11 +98,30 @@ bale run --message "Inspect the repository" --workspace "$PWD"
   "iterations": 1,
   "tool_calls": 0,
   "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
-  "error": null
+  "error": null,
+  "diff": "",
+  "checkpoints": []
 }
 ```
 
-退出码：`completed` 为 0，`failed` 或 `cancelled` 为 1。可用 `--max-iterations` 限制循环次数，`--token-budget` 设置预算。当前仅注册只读工具（`read_file`、`list_files`、`search_files`），所有路径都受 `WorkspaceGuard` 防护，无法逃逸工作区。
+退出码：`completed` 为 0，`failed` 或 `cancelled` 为 1。可用 `--max-iterations` 限制循环次数，`--token-budget` 设置预算。所有路径都受 `WorkspaceGuard` 防护，无法逃逸工作区。
+
+### 4.2 修改代码并运行测试
+
+B2a 加入了写入与执行工具：`write_file`、`edit_file`、`shell`、`run_tests`、`git_diff`、`finish`。写与执行属于副作用操作，默认需要审批；`--yes` 表示自动批准，适合脚本和演示：
+
+```bash
+bale run \
+  --message "Add a docstring to app.py and run the tests" \
+  --workspace "$PWD" \
+  --yes
+```
+
+- `--approval-mode`：`auto_read`（写/执行一律拒绝）、`approve_write`（默认，写/执行逐次审批）、`approve_all`（全部审批）。
+- 未传 `--yes` 且进程不是交互终端时，写/执行会被拒绝并回报给模型，不会阻塞等待输入。
+- `--shadow-git/--no-shadow-git`（默认开启）：在系统临时目录建立独立 git-dir，为每次迭代创建快照，并把相对基线的 Diff 写入结果的 `diff` 字段；不会读写工作区自己的 `.git`。
+- `shell` 不接受管道、重定向或串联等 shell 元字符，推荐直接传参数数组。`run_tests` 使用当前 Python 解释器执行 pytest。
+- `LocalSandbox` 只是受控开发环境的防护层，提供命令 deny-list、环境变量白名单、cwd 限定、超时和输出截断，**不是**不可信代码的安全边界；容器隔离属于后续里程碑。
 
 ## 5. 使用 HTTP 创建 Turn
 
@@ -290,7 +309,7 @@ pytest -q
 python -m compileall examples
 ```
 
-测试覆盖契约、配置、FakeProvider、CLI/HTTP 同构、HTTP 输入校验、B1 只读运行时（消息契约、路径防护、工具注册器、只读工具、ReAct 循环、CLI run）和 MCP 示例语法，不需要网络或 API Key。仓库已配置 GitHub Actions，但远程结果应以 Actions 页面为准。
+测试覆盖契约、配置、FakeProvider、CLI/HTTP 同构、HTTP 输入校验、B1 只读运行时（消息契约、路径防护、工具注册器、只读工具、ReAct 循环、CLI run）、B2a 写入运行时（审批策略、Sandbox 防护、ShadowGit、写入/编辑、执行工具、幂等与端到端改码闭环）和 MCP 示例语法，不需要网络或 API Key。部分测试会在临时目录启动真实 pytest 子进程。仓库已配置 GitHub Actions，但远程结果应以 Actions 页面为准。
 
 修改 MCP 示例后，重新执行第 7 节脚本，确认：
 

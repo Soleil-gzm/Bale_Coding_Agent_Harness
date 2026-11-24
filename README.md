@@ -2,7 +2,7 @@
 
 Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目标是将模型交互、工具治理、上下文管理、隔离执行、状态恢复和执行证据组织为可扩展的薄内核。
 
-**当前仓库处于早期建设阶段。** 已落地 B0 工程基础：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider，以及只创建 Turn 的 CLI/HTTP 入口。仓库同时保留一个可独立运行的 MCP（Model Context Protocol）`stdio` 文件写入示例。Turn 目前不会执行；真实 OpenAIProvider、Agent Loop、ToolRegistry、Sandbox、Session 等运行时能力仍未实现。
+**当前仓库处于早期建设阶段。** 已落地 B0 工程基础、B1 只读 ReAct 运行时和 B2a 写入运行时：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider、只创建 Turn 的 CLI/HTTP 入口，以及带审批、ShadowGit 快照和本地 Sandbox 的 `bale run`。真实 OpenAIProvider、Docker 容器隔离、Session/Resume 与 Trace 仍未实现。
 
 ## 当前功能
 
@@ -14,23 +14,32 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - `bale turn` 与 `POST /v1/turns` 复用同一 `build_turn()` 构造逻辑，返回字段一致的 `created` Turn。
 - CLI 和 HTTP 只创建 Turn，不调用模型或工具。
 
+### 只读与写入运行时
+
+- `ToolRegistry` 统一处理参数校验、审批、`call_id` 幂等、超时、错误归一化和只读并发。
+- 只读工具：`read_file`、`list_files`、`search_files`、`git_diff`；写入工具：`write_file`、`edit_file`；执行工具：`shell`、`run_tests`；`finish` 显式结束任务。
+- `WorkspaceGuard` 阻止 `..` 与符号链接逃逸；写入采用临时文件加原子替换。
+- `PolicyApprover` 支持 `auto_read`、`approve_write`、`approve_all`，无审批人时写/执行一律拒绝。
+- `LocalSandbox` 提供命令 deny-list、环境变量白名单、cwd 限定、超时和输出截断；它不是不可信代码的安全边界。
+- `ShadowGit` 使用独立 git-dir 做基线与逐迭代快照，输出相对基线的 Diff，不读写工作区自己的 `.git`。
+- `bale run` 驱动上述闭环，输出包含 `diff` 与 `checkpoints` 的 `RunResult` JSON。
+
 ### MCP 文件写入示例
 
 - 使用 `FastMCP` 创建名为 `WriteServer` 的 MCP 服务，通过标准输入输出通信。
 - 注册异步 `write_file(content: str)` 工具，将内容以 UTF-8 写入 `output/note_<时间戳>.txt`。
 - 返回写入结果或错误文本，便于验证 MCP list/call 流程。
 
-当前功能不需要模型 API、数据库、Docker 或 GPU。
+当前功能不需要模型 API、数据库、Docker 或 GPU；ShadowGit 快照需要本机可用的 `git`。
 
 ## 功能边界
 
-当前实现提供契约与 Turn 构造入口，不是完整 Coding Agent：
+当前实现提供契约、Turn 构造入口和受控的本地执行闭环，不是完整的 Coding Agent：
 
-- 不包含 Agent Loop、ReAct、真实模型调用或自动代码修改。
 - 真实 OpenAIProvider 尚未实现；即使配置了有效 Key，`openai` 模式也会明确报告未实现，不会退回 Fake。
-- `ToolResult` 目前只是数据契约，不包含 ToolRegistry、工具执行、权限审批或超时治理。
-- 不包含 Docker Sandbox、工作区隔离或不可信代码执行能力。
-- 不包含 Session、Checkpoint、Trace、评测、Turn 执行接口、SSE 或持久化。
+- 不包含 Docker Sandbox 或不可信代码隔离；`LocalSandbox` 仅适用于受控开发场景。
+- 不包含 Session/Resume、Checkpoint 持久化、Trace、评测、SSE 或 HTTP 执行接口。
+- 审批只在 CLI 中提供交互确认与 `--yes`，没有 HTTP 审批流。
 - MCP 示例的文件名精度为秒，同一秒内的重复调用可能覆盖同名文件。
 - MCP 输出目录相对于进程当前工作目录，不应将其误认为安全沙箱。
 
@@ -44,6 +53,8 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 | 数据与配置 | Pydantic v2、pydantic-settings | 严格契约、环境变量与 `.env` |
 | CLI / HTTP | Typer、FastAPI、Uvicorn | 共享 Turn 构造逻辑 |
 | Provider | Protocol、FakeProvider | 最小异步接口与离线测试实现 |
+| 工具治理 | ToolRegistry、PolicyApprover | 参数校验、审批、幂等、超时与错误归一化 |
+| 本地执行 | LocalSandbox、ShadowGit | 子进程防护层与独立 git-dir 快照 |
 | 工具协议 | Model Context Protocol | MCP 示例使用 `stdio` transport |
 | SDK | `mcp==1.30.0` | 使用 `mcp.server.fastmcp.FastMCP` |
 | 测试与检查 | pytest、Ruff、pip-tools | 离线测试、静态检查与哈希锁文件 |
@@ -58,9 +69,18 @@ Bale_Coding_Agent_Harness/
 │   ├── settings.py           # BALE_ 配置与密钥校验
 │   ├── providers.py          # ModelProvider、FakeProvider 与工厂
 │   ├── turns.py              # TurnRequest 与共享 build_turn()
-│   ├── cli.py                # bale turn
-│   └── http.py               # POST /v1/turns 应用工厂
-├── tests/                    # 契约、配置、Provider 与入口测试
+│   ├── cli.py                # bale turn / bale run
+│   ├── http.py               # POST /v1/turns 应用工厂
+│   └── agent/                # ReAct 运行时
+│       ├── messages.py       # 运行时消息与工具契约
+│       ├── security.py       # WorkspaceGuard 路径防护
+│       ├── context.py        # 初始上下文装配
+│       ├── approval.py       # 审批策略
+│       ├── sandbox.py        # Sandbox 端口与 LocalSandbox
+│       ├── checkpoint.py     # ShadowGit 快照
+│       ├── loop.py           # AgentLoop 与 RunResult
+│       └── tools/            # registry、内置/写入/执行/git 工具
+├── tests/                    # 契约、配置、入口与运行时测试
 ├── examples/mcp/
 │   └── write_server.py       # 独立 FastMCP 服务端示例
 ├── docs/
@@ -91,6 +111,12 @@ python -m pip install --no-deps .
 
 ```bash
 bale turn --message "Inspect the repository" --workspace "$PWD" --token-budget 4096
+```
+
+执行一个 ReAct 运行（默认 Fake Provider 立即完成；`--yes` 自动批准写入与命令）：
+
+```bash
+bale run --message "Inspect the repository" --workspace "$PWD" --yes
 ```
 
 启动只提供 Turn 创建接口的 HTTP 应用：
