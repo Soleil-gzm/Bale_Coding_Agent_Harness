@@ -5,7 +5,12 @@ from typing import Any
 import pytest
 
 from bale_harness.agent.approval import PolicyApprover, auto_approve
-from bale_harness.agent.messages import ToolCall, ToolSpec
+from bale_harness.agent.messages import (
+    CachedResult,
+    ToolCall,
+    ToolSpec,
+    argument_fingerprint,
+)
 from bale_harness.agent.tools.registry import BaseTool, ToolRegistry
 from bale_harness.contracts import ToolResult
 
@@ -275,3 +280,52 @@ def test_batch_runs_safe_tools_in_parallel() -> None:
 
 def test_empty_batch_returns_empty() -> None:
     assert _run(ToolRegistry().execute_batch([])) == []
+
+
+def test_seeded_result_skips_execution() -> None:
+    tool = WriteTool()
+    registry = ToolRegistry(PolicyApprover("approve_write", auto_approve))
+    registry.register(tool)
+    call = ToolCall(call_id="w1", name="write_file", arguments={})
+    cached = ToolResult(
+        call_id="w1",
+        name="write_file",
+        status="success",
+        content="from session",
+        latency_ms=0,
+    )
+    registry.seed_executed(
+        [
+            CachedResult(
+                call_id="w1",
+                name="write_file",
+                args_hash=argument_fingerprint({}),
+                result=cached,
+            )
+        ]
+    )
+
+    result = _run(registry.execute(call))
+
+    assert result.content == "from session"
+    assert tool.executions == 0
+
+
+def test_same_call_id_with_different_arguments_is_not_reused() -> None:
+    tool = WriteTool()
+    registry = ToolRegistry(PolicyApprover("approve_write", auto_approve))
+    registry.register(tool)
+
+    _run(
+        registry.execute(
+            ToolCall(call_id="w1", name="write_file", arguments={"path": "a"})
+        )
+    )
+    second = _run(
+        registry.execute(
+            ToolCall(call_id="w1", name="write_file", arguments={"path": "b"})
+        )
+    )
+
+    assert second.status == "success"
+    assert tool.executions == 2

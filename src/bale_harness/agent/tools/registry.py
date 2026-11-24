@@ -11,10 +11,16 @@ an :class:`~bale_harness.agent.approval.Approver`; without one they are denied.
 
 import asyncio
 import time
+from collections.abc import Iterable
 from typing import Any, Protocol
 
 from bale_harness.agent.approval import Approver
-from bale_harness.agent.messages import ToolCall, ToolSpec
+from bale_harness.agent.messages import (
+    CachedResult,
+    ToolCall,
+    ToolSpec,
+    argument_fingerprint,
+)
 from bale_harness.contracts import ToolResult
 
 
@@ -49,13 +55,19 @@ class ToolRegistry:
     def __init__(self, approver: Approver | None = None) -> None:
         self._tools: dict[str, Tool] = {}
         self._approver = approver
-        self._executed: dict[str, ToolResult] = {}
+        self._executed: dict[tuple[str, str, str], ToolResult] = {}
 
     def register(self, tool: Tool) -> None:
         name = tool.spec.name
         if name in self._tools:
             raise ValueError(f"tool already registered: {name}")
         self._tools[name] = tool
+
+    def seed_executed(self, entries: Iterable[CachedResult]) -> None:
+        """Load persisted results so side effects are not repeated on resume."""
+        for entry in entries:
+            key = (entry.call_id, entry.name, entry.args_hash)
+            self._executed[key] = entry.result
 
     def list_specs(self) -> list[ToolSpec]:
         return [tool.spec for tool in self._tools.values()]
@@ -90,8 +102,9 @@ class ToolRegistry:
 
         has_side_effects = tool.spec.side_effect != "read"
         if has_side_effects:
-            cached = self._executed.get(call.call_id)
-            if cached is not None and cached.name == call.name:
+            key = self._cache_key(call)
+            cached = self._executed.get(key)
+            if cached is not None:
                 return cached
 
             if not await self._is_approved(call, tool.spec):
@@ -131,8 +144,11 @@ class ToolRegistry:
         if result.call_id != call.call_id:
             result = result.model_copy(update={"call_id": call.call_id})
         if has_side_effects:
-            self._executed[call.call_id] = result
+            self._executed[self._cache_key(call)] = result
         return result
+
+    def _cache_key(self, call: ToolCall) -> tuple[str, str, str]:
+        return (call.call_id, call.name, argument_fingerprint(call.arguments))
 
     async def _is_approved(self, call: ToolCall, spec: ToolSpec) -> bool:
         if self._approver is None:
