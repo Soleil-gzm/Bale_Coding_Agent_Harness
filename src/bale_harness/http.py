@@ -3,20 +3,24 @@
 ``POST /v1/turns`` only constructs a Turn. ``POST /v1/runs`` executes one turn
 and returns the final :class:`RunResult`; ``POST /v1/runs/stream`` executes the
 same turn and streams trace events as Server-Sent Events, ending with a
-``result`` event.
+``result`` event. ``GET /health`` is public; every ``/v1`` route requires a
+bearer token when ``BALE_HTTP_API_KEY`` is set. ``POST /v1/runs/{run_id}/cancel``
+cooperatively cancels an in-flight run at the next iteration boundary.
 
 HTTP runs are non-interactive: write and execute tools are denied unless the
 caller sets ``approve_writes=true``.
 """
 
 import asyncio
+import hmac
 import json
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 from uuid import uuid4
 
-from fastapi import FastAPI, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -47,6 +51,9 @@ class RunRequest(BaseModel):
     approval_mode: ApprovalMode = "approve_write"
     approve_writes: bool = False
     shadow_git: bool = True
+    run_id: str | None = Field(
+        default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._-]+$"
+    )
 
     @field_validator("message")
     @classmethod
@@ -63,6 +70,44 @@ class RunRequest(BaseModel):
         if not resolved.is_dir():
             raise ValueError("workspace must be an existing directory")
         return resolved
+
+
+class RunAlreadyActiveError(Exception):
+    """Raised when a caller reuses the id of an in-flight run."""
+
+
+@dataclass
+class RunHandle:
+    """Cancellation state shared with one in-flight run."""
+
+    run_id: str
+    cancel: asyncio.Event = field(default_factory=asyncio.Event)
+
+
+class RunRegistry:
+    """Track in-flight runs so they can be cancelled by id."""
+
+    def __init__(self) -> None:
+        self._runs: dict[str, RunHandle] = {}
+
+    def start(self, run_id: str | None = None) -> RunHandle:
+        """Register a run, generating an id when the caller did not supply one."""
+        resolved = run_id or uuid4().hex
+        if resolved in self._runs:
+            raise RunAlreadyActiveError(f"run {resolved} is already active")
+        handle = RunHandle(run_id=resolved)
+        self._runs[resolved] = handle
+        return handle
+
+    def finish(self, handle: RunHandle) -> None:
+        self._runs.pop(handle.run_id, None)
+
+    def cancel(self, run_id: str) -> bool:
+        handle = self._runs.get(run_id)
+        if handle is None:
+            return False
+        handle.cancel.set()
+        return True
 
 
 class _TeeTraceExporter:
@@ -112,6 +157,7 @@ async def _execute(
     provider: ModelProvider,
     *,
     tracer: TraceExporter | None = None,
+    cancel: asyncio.Event | None = None,
 ) -> RunResult:
     checkpoint = ShadowGit(request.workspace) if request.shadow_git else None
     if tracer is None and settings.trace_path:
@@ -127,7 +173,7 @@ async def _execute(
         cost_rates=_cost_rates(settings),
     )
     try:
-        return await loop.run(_build_turn(request))
+        return await loop.run(_build_turn(request), cancelled=cancel)
     finally:
         if checkpoint is not None:
             await checkpoint.cleanup()
@@ -138,7 +184,11 @@ def _sse(event: str, data: str) -> str:
 
 
 def _stream_events(
-    request: RunRequest, settings: Settings, provider: ModelProvider
+    request: RunRequest,
+    settings: Settings,
+    provider: ModelProvider,
+    handle: RunHandle,
+    registry: RunRegistry,
 ) -> AsyncIterator[str]:
     """Return an SSE body that runs the turn as events are consumed."""
     queue = QueueTraceExporter()
@@ -147,9 +197,18 @@ def _stream_events(
         tracer = _TeeTraceExporter(queue, JsonlTraceExporter(settings.trace_path))
 
     async def body() -> AsyncIterator[str]:
-        task = asyncio.create_task(_execute(request, settings, provider, tracer=tracer))
+        task = asyncio.create_task(
+            _execute(
+                request,
+                settings,
+                provider,
+                tracer=tracer,
+                cancel=handle.cancel,
+            )
+        )
         task.add_done_callback(lambda _: queue.close_nowait())
         try:
+            yield _sse("run", json.dumps({"run_id": handle.run_id}))
             async for event in queue.stream():
                 yield _sse("trace", event.model_dump_json())
             result = await task
@@ -159,6 +218,8 @@ def _stream_events(
             raise
         except Exception as error:
             yield _sse("error", json.dumps({"error": str(error)}, ensure_ascii=False))
+        finally:
+            registry.finish(handle)
 
     return body()
 
@@ -170,29 +231,97 @@ def create_app(
     """Build the HTTP application, optionally with injected settings/provider."""
     resolved = settings or Settings()
     model_provider = provider or create_provider(resolved)
+    api_key = resolved.http_api_key
     app = FastAPI(title="Bale Coding Agent Harness")
+    app.state.runs = RunRegistry()
+    registry: RunRegistry = app.state.runs
+
+    def _require_auth(
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> None:
+        """Reject requests without the configured bearer token."""
+        if api_key is None:
+            return
+        scheme, _, token = (authorization or "").partition(" ")
+        if scheme.lower() == "bearer" and hmac.compare_digest(
+            token, api_key.get_secret_value()
+        ):
+            return
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid or missing API key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    @app.get("/health")
+    async def health() -> dict[str, str]:
+        return {"status": "ok"}
 
     @app.post(
         "/v1/turns",
         response_model=Turn,
         status_code=status.HTTP_201_CREATED,
+        dependencies=[Depends(_require_auth)],
     )
     def create_turn(request: TurnRequest) -> Turn:
         return build_turn(request)
 
-    @app.post("/v1/runs", response_model=RunResult)
-    async def run_turn(request: RunRequest) -> RunResult:
-        return await _execute(request, resolved, model_provider)
+    @app.post(
+        "/v1/runs",
+        response_model=RunResult,
+        dependencies=[Depends(_require_auth)],
+    )
+    async def run_turn(request: RunRequest, response: Response) -> RunResult:
+        try:
+            handle = registry.start(request.run_id)
+        except RunAlreadyActiveError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(error),
+            ) from error
+        response.headers["X-Run-Id"] = handle.run_id
+        try:
+            return await _execute(
+                request,
+                resolved,
+                model_provider,
+                cancel=handle.cancel,
+            )
+        finally:
+            registry.finish(handle)
 
-    @app.post("/v1/runs/stream")
+    @app.post(
+        "/v1/runs/stream",
+        dependencies=[Depends(_require_auth)],
+    )
     async def stream_turn(request: RunRequest) -> StreamingResponse:
+        try:
+            handle = registry.start(request.run_id)
+        except RunAlreadyActiveError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(error),
+            ) from error
         return StreamingResponse(
-            _stream_events(request, resolved, model_provider),
+            _stream_events(request, resolved, model_provider, handle, registry),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
                 "X-Accel-Buffering": "no",
+                "X-Run-Id": handle.run_id,
             },
         )
+
+    @app.post(
+        "/v1/runs/{run_id}/cancel",
+        dependencies=[Depends(_require_auth)],
+    )
+    async def cancel_run(run_id: str) -> dict[str, object]:
+        if not registry.cancel(run_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"unknown run: {run_id}",
+            )
+        return {"run_id": run_id, "cancelled": True}
 
     return app
