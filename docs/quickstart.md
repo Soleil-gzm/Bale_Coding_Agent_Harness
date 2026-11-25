@@ -231,7 +231,7 @@ bale run \
 
 ### 4.5 生成运行报告
 
-`bale report` 读取 Session 数据库，可选叠加 Trace，输出 Markdown：
+`bale report` 读取 Session 数据库，可选叠加 Trace，输出 Markdown（`--format html` 时输出独立 HTML 页面）：
 
 ```bash
 bale report \
@@ -239,6 +239,12 @@ bale report \
   --session-id 6f1c1f6e-2e0e-4d0e-9d1e-2f7f1a9b8c11 \
   --trace "$PWD/.bale/trace.jsonl" \
   --output "$PWD/.bale/report.md"
+
+bale report \
+  --session-db "$PWD/.bale/sessions.db" \
+  --session-id 6f1c1f6e-2e0e-4d0e-9d1e-2f7f1a9b8c11 \
+  --format html \
+  --output "$PWD/.bale/report.html"
 ```
 
 报告包含：
@@ -249,7 +255,7 @@ bale report \
 - Trace 概要：事件计数、模型耗时与工具耗时；未提供 Trace 时显示占位说明。
 - 记忆：写入的 `after_turn` 摘要。
 
-省略 `--output` 时输出到标准输出。Session 不存在、没有 Turn 或 Trace 路径无效时命令以非零状态退出；报告不调用模型，也不修改数据库。
+省略 `--output` 时输出到标准输出。Session 不存在、没有 Turn、Trace 路径无效或 `--format` 不是 `markdown`/`html` 时命令以非零状态退出；报告不调用模型，也不修改数据库。HTML 由报告子集就地转换，所有文本先做 HTML 转义，不依赖第三方渲染库，也不生成 PDF。
 
 ### 4.6 多轮交互
 

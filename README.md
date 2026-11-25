@@ -75,8 +75,8 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 
 ### 运行报告
 
-- `bale report` 读取 SQLite Session 与可选 JSONL Trace，生成只读 Markdown 报告：会话概要、每个 Turn 的状态/用量/任务与答案、工具调用表、Trace 事件计数和记忆摘要。
-- 报告不调用模型、不修改 Session；默认输出到标准输出，`--output` 可直接写入文件。
+- `bale report` 读取 SQLite Session 与可选 JSONL Trace，生成只读报告：会话概要、每个 Turn 的状态/用量/任务与答案、工具调用表、Trace 事件计数和记忆摘要。
+- 报告不调用模型、不修改 Session；默认输出 Markdown，`--format html` 输出自包含 HTML 页面（文本先转义，不引入新依赖），`--output` 可直接写入文件。HTTP 报告端点仍只返回 Markdown。
 
 ### Checkpoint 持久化与撤销
 
@@ -116,7 +116,7 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - Session 持久化基于本地 SQLite 文件，不提供多进程协调或远程存储；HTTP 侧只支持单进程内复用。
 - Checkpoint 目录已可持久化，支持 `bale undo` 恢复以及 `bale checkpoint list/clean` 浏览与清理，但依赖本机 `git`。
 - Trace 为本地追加 JSONL，可选用 `BALE_TRACE_MAX_BYTES` 按大小轮转，无采样或远程导出；`estimated_cost` 只是按配置费率的估算，不代表 Provider 账单。
-- 运行报告是只读 Markdown 投影，提供 CLI 与 HTTP（`GET /v1/runs/{run_id}/report`）入口，不调用模型、不执行工具，也不包含 HTML/PDF 导出。
+- 运行报告是只读投影，CLI 可输出 Markdown 或 HTML（`--format html`），HTTP（`GET /v1/runs/{run_id}/report`）只提供 Markdown；不调用模型、不执行工具，也不包含 PDF 导出。
 - 检索默认是无第三方依赖的 BM25 词法排序（Python 按顶层定义切块，其余按行窗口），可选叠加 OpenAI 兼容 embedding 的向量召回与按文件签名的增量索引；向量端点不可用时会退回 BM25。评测只执行 JSON 固定任务与文件级断言，可选用 Docker 沙箱执行任务命令，不包含自动生成任务或模型评分。
 - MCP 支持 stdio、streamable HTTP 与 SSE transport；`bale run` 每次重建会话，`bale chat` 与 HTTP 入口在各自生命周期内复用一个会话，不包含工具缓存、工具级审批界面或跨进程会话复用。HTTP/SSE 只使用配置的 `url` 与 `headers`，不提供重连或服务发现。`read_only` 是调用方声明，不代表服务器已被隔离。
 - HTTP 接口提供 Bearer 认证（多 Key + `read`/`write` scope）、内存限流、SQLite Session、HTTP 审批、JSONL 审计、Markdown 报告端点、`run_id` 指定与协作式取消；没有 TLS、多副本共享状态或按工具/路径的 ACL，`approve_writes=true` 只应由可信调用方使用。

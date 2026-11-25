@@ -262,6 +262,7 @@ export BALE_EMBEDDING_API_KEY=sk-...
 | 参数 | 覆盖/补充的配置 | 说明 |
 |---|---|---|
 | `--trace` | `BALE_TRACE_PATH` | 单次运行指定 JSONL 路径 |
+| `--format`（`bale report`） | 无环境变量 | `markdown`（默认）或 `html`；HTML 为自包含页面，文本先转义 |
 | `--session-db` | 无环境变量 | 启用 SQLite Session；Checkpoint 目录由它派生 |
 | `--checkpoint-dir` | 无环境变量 | 显式指定 ShadowGit 持久化目录 |
 | `--mcp-config` | `BALE_MCP_CONFIG`（仅 HTTP 使用） | 挂载 MCP 服务器（stdio/HTTP/SSE） |

@@ -103,14 +103,14 @@ flowchart LR
 | `agent/memory.py` | `after_turn` fast curator：`Task/Outcome` 有界摘要 | 仅 completed 且 best-effort |
 | `agent/trace.py` | `TraceEvent`、`TraceExporter` 协议、`JsonlTraceExporter` 与 `NullTraceExporter`：追加写、序号递增、脱敏、失败不阻断、可选按大小轮转 | 本地 JSONL，无采样或远程导出 |
 | `agent/cost.py` | `CostRates` 与 `estimate_cost`：按每千 token 费率估算成本 | 不内置默认价格，结果不是 Provider 账单 |
-| `agent/report.py` | `build_report`：Session、已执行调用、记忆与 Trace 汇总为 Markdown | 只读投影，不调用模型、不改 Session |
+| `agent/report.py` | `build_report`：Session、已执行调用、记忆与 Trace 汇总为 Markdown；`markdown_to_html` 就地转换为转义后的独立 HTML | 只读投影，不调用模型、不改 Session、不生成 PDF |
 | `agent/loop.py` | ReAct 循环、终止/取消/迭代与 token 及 wall-clock 预算、上下文重建、检索注入、Session 持久化、恢复、Trace 埋点、耗时与成本与 Diff 聚合 | 无远程 Trace 导出 |
 | `repo_index/index.py` | `chunk_source`：Python 顶层定义优先、行窗口回退；`Bm25Index`、`scores` 与 `SearchHit` | 纯词法基线，不读取磁盘快照 |
 | `repo_index/hybrid.py` | `HybridIndex`：BM25 与向量分数归一化融合、按文件签名增量重建、可选 JSON 快照、embedding 失败降级 | 同步实现，索引构建发生在调用线程 |
 | `repo_index/embedding.py` | `Embedder` 协议、`OpenAIEmbedder` 与 `create_embedder`：标准库 `urllib` 调用 OpenAI 兼容 `/embeddings` | 不引入第三方向量库；远程端点缺少 Key 时返回 `None` |
 | `repo_index/store.py` | JSON 快照读写：版本校验、文件签名、片段与可选向量、原子替换 | 快照损坏时整体忽略并重建 |
 | `repo_index/retriever.py` | `Bm25Retriever`：懒加载 `HybridIndex`，按 `top_k` 与字符上限生成 `path:start-end` 片段 | 同步实现，由 Loop 在线程中调用 |
-| `cli.py` `run` / `report` / `chat` / `session` / `trace` / `undo` / `checkpoint` | `run` 执行 Turn，支持 Session/Resume/Trace；`report` 输出 Markdown；`chat` 循环 Turn；`session`/`trace`/`checkpoint list` 只读检查；`undo` 从 Checkpoint 恢复；`checkpoint clean` 删除快照目录 | 退出码：`completed` 为 0，否则为 1 |
+| `cli.py` `run` / `report` / `chat` / `session` / `trace` / `undo` / `checkpoint` | `run` 执行 Turn，支持 Session/Resume/Trace；`report` 输出 Markdown 或 HTML；`chat` 循环 Turn；`session`/`trace`/`checkpoint list` 只读检查；`undo` 从 Checkpoint 恢复；`checkpoint clean` 删除快照目录 | 退出码：`completed` 为 0，否则为 1 |
 
 `ModelProvider.complete` 已演进为接收消息列表与工具定义、返回结构化 `ModelResponse`；`FakeProvider` 支持脚本化响应队列，使循环测试完全离线且确定；`OpenAICompatibleProvider` 面向任意 OpenAI 兼容端点，测试通过注入 transport 完成，不访问网络。
 
