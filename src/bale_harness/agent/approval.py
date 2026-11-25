@@ -37,6 +37,13 @@ class Approver(Protocol):
         """Return whether ``call`` may run."""
 
 
+class AsyncDecider(Protocol):
+    """Awaitable decider used when approval itself is asynchronous."""
+
+    async def __call__(self, call: ToolCall, spec: ToolSpec) -> bool:
+        """Return whether ``call`` may run."""
+
+
 class PolicyApprover:
     """Apply an approval mode, delegating gated calls to a decider."""
 
@@ -54,3 +61,22 @@ class PolicyApprover:
         if self._decider is None:
             return False
         return bool(self._decider(call, spec))
+
+
+class AsyncPolicyApprover:
+    """Apply an approval mode, awaiting an async decider for gated calls."""
+
+    def __init__(
+        self, mode: ApprovalMode = "approve_write", decider: AsyncDecider | None = None
+    ) -> None:
+        self._mode = mode
+        self._decider = decider
+
+    async def approve(self, call: ToolCall, spec: ToolSpec) -> bool:
+        if self._mode == "auto_read":
+            return spec.side_effect == "read"
+        if self._mode == "approve_write" and spec.side_effect == "read":
+            return True
+        if self._decider is None:
+            return False
+        return bool(await self._decider(call, spec))

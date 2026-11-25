@@ -23,7 +23,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from bale_harness.agent.approval import Decider, PolicyApprover
+from bale_harness.agent.approval import Approver, Decider, PolicyApprover
 from bale_harness.agent.checkpoint import ShadowGit, ShadowGitError
 from bale_harness.agent.context import (
     DEFAULT_CONTEXT_WINDOW,
@@ -666,7 +666,7 @@ def build_default_loop(
     workspace: Path,
     *,
     approval_mode: ApprovalMode = "approve_write",
-    approver: Decider | None = None,
+    approver: Decider | Approver | None = None,
     sandbox: Sandbox | None = None,
     checkpoint: ShadowGit | None = None,
     session: SessionStore | None = None,
@@ -681,11 +681,17 @@ def build_default_loop(
     Read tools run freely. Write and execute tools require ``approver`` to
     approve each call; without one they are denied. ``extra_tools`` (for
     example MCP adapters) are registered after the built-ins and follow the
-    same governance. A ``retriever`` supplies untrusted workspace excerpts for
-    the system prefix of each turn.
+    same governance. ``approver`` is either a synchronous ``Decider`` or an
+    ``Approver`` that decides asynchronously (for example over HTTP). A
+    ``retriever`` supplies untrusted workspace excerpts for the system prefix
+    of each turn.
     """
     guard = WorkspaceGuard(workspace)
-    registry = ToolRegistry(PolicyApprover(approval_mode, approver))
+    if approver is not None and hasattr(approver, "approve"):
+        policy: Approver = approver  # type: ignore[assignment]
+    else:
+        policy = PolicyApprover(approval_mode, approver)  # type: ignore[arg-type]
+    registry = ToolRegistry(policy)
     tools: list[Tool] = [
         *build_default_tools(guard),
         *build_write_tools(guard),
