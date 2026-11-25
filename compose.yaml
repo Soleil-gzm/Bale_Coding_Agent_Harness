@@ -1,0 +1,35 @@
+name: bale-harness
+
+services:
+  bale:
+    build:
+      context: .
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-deb.debian.org}
+    image: bale-harness:0.1.0
+    init: true
+    ports:
+      - "${BALE_BIND:-127.0.0.1}:${BALE_PORT:-8000}:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      BALE_PROVIDER: ${BALE_PROVIDER:-fake}
+      BALE_OPENAI_API_KEY: ${BALE_OPENAI_API_KEY:-}
+      BALE_OPENAI_BASE_URL: ${BALE_OPENAI_BASE_URL:-https://api.openai.com/v1}
+      BALE_OPENAI_MODEL: ${BALE_OPENAI_MODEL:-gpt-4o-mini}
+      BALE_RETRIEVAL_ENABLED: ${BALE_RETRIEVAL_ENABLED:-true}
+      BALE_RETRIEVAL_TOP_K: ${BALE_RETRIEVAL_TOP_K:-5}
+      BALE_TRACE_PATH: /data/trace.jsonl
+    volumes:
+      - ${BALE_WORKSPACE:-./workspace}:/workspace
+      - bale-data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
+volumes:
+  bale-data:
