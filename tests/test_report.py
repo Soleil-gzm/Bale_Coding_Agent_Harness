@@ -3,7 +3,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from bale_harness.agent.messages import CachedResult, Usage
-from bale_harness.agent.report import build_report
+from bale_harness.agent.report import build_report, markdown_to_html
 from bale_harness.agent.session import TurnRecord
 from bale_harness.agent.trace import TraceEvent
 from bale_harness.contracts import ToolResult
@@ -165,3 +165,40 @@ def test_report_truncates_long_text(tmp_path: Path) -> None:
 
     assert "… (truncated)" in report
     assert "x" * 3000 not in report
+
+
+def test_markdown_to_html_escapes_content() -> None:
+    page = markdown_to_html("# Title\n\n<script>alert(1)</script>\n")
+
+    assert page.startswith("<!doctype html>")
+    assert "<h1>Title</h1>" in page
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
+    assert "<script>" not in page
+
+
+def test_markdown_to_html_renders_tables_and_inline_markup() -> None:
+    markdown = (
+        "# Report\n\n"
+        "| Tool | Count |\n"
+        "|---|---|\n"
+        "| `read_file` | **2** |\n\n"
+        "> echoed **answer**\n\n"
+        "- first\n"
+        "- second\n"
+    )
+
+    page = markdown_to_html(markdown)
+
+    assert "<th>Tool</th>" in page
+    assert "<td><code>read_file</code></td>" in page
+    assert "<td><strong>2</strong></td>" in page
+    assert "<blockquote>echoed <strong>answer</strong></blockquote>" in page
+    assert "<li>first</li>" in page
+    assert "<li>second</li>" in page
+
+
+def test_markdown_to_html_preserves_escaped_pipes() -> None:
+    page = markdown_to_html("| A | B |\n|---|---|\n| a\\|b | c |\n")
+
+    assert "<td>a|b</td>" in page
+    assert "<td>c</td>" in page

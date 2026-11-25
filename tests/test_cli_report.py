@@ -67,6 +67,56 @@ def test_report_writes_output_file(tmp_path: Path) -> None:
     assert "# Bale Run Report" in output.read_text(encoding="utf-8")
 
 
+def test_report_writes_html_output(tmp_path: Path) -> None:
+    db = tmp_path / "sessions.db"
+    session_id = uuid4()
+    _seed(db, tmp_path, session_id)
+    output = tmp_path / "reports" / "run.html"
+
+    result = runner.invoke(
+        app,
+        [
+            "report",
+            "--session-db",
+            str(db),
+            "--session-id",
+            str(session_id),
+            "--format",
+            "html",
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    page = output.read_text(encoding="utf-8")
+    assert page.startswith("<!doctype html>")
+    assert "<h1>Bale Run Report</h1>" in page
+    assert "write docs" in page
+
+
+def test_report_rejects_unknown_format(tmp_path: Path) -> None:
+    db = tmp_path / "sessions.db"
+    session_id = uuid4()
+    _seed(db, tmp_path, session_id)
+
+    result = runner.invoke(
+        app,
+        [
+            "report",
+            "--session-db",
+            str(db),
+            "--session-id",
+            str(session_id),
+            "--format",
+            "pdf",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "unsupported format" in result.output
+
+
 def test_report_rejects_unknown_session(tmp_path: Path) -> None:
     db = tmp_path / "sessions.db"
     _seed(db, tmp_path, uuid4())
