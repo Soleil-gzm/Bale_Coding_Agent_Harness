@@ -131,6 +131,7 @@ async def run_task(
             workspace=workspace,
             token_budget=task.token_budget,
             max_iterations=task.max_iterations,
+            time_budget=task.time_budget,
         )
         result = await loop.run(turn)
         check_results = evaluate_checks(workspace, task.checks)

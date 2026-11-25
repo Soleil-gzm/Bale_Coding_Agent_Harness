@@ -54,6 +54,7 @@ class EvalTask(BaseModel):
     message: str = Field(min_length=1)
     max_iterations: int = Field(default=8, ge=1)
     token_budget: int = Field(default=128_000, ge=1)
+    time_budget: float | None = Field(default=None, gt=0)
     checks: list[Check] = Field(default_factory=list)
 
 

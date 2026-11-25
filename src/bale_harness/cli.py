@@ -144,6 +144,7 @@ def turn_command(
     repo_revision: Annotated[str | None, typer.Option()] = None,
     max_iterations: Annotated[int, typer.Option(min=1)] = 20,
     cost_budget: Annotated[float | None, typer.Option(min=0)] = None,
+    time_budget: Annotated[float | None, typer.Option(min=0.001)] = None,
     approval_mode: Annotated[ApprovalMode, typer.Option()] = "approve_write",
 ) -> None:
     create_provider(Settings())
@@ -154,6 +155,7 @@ def turn_command(
         max_iterations=max_iterations,
         token_budget=token_budget,
         cost_budget=cost_budget,
+        time_budget=time_budget,
         approval_mode=approval_mode,
     )
     typer.echo(build_turn(request).model_dump_json())
@@ -302,6 +304,14 @@ def run_command(
     message: Annotated[str | None, typer.Option(help="Current user message")] = None,
     token_budget: Annotated[int, typer.Option(min=1)] = 128000,
     max_iterations: Annotated[int, typer.Option(min=1, max=500)] = 20,
+    time_budget: Annotated[
+        float | None,
+        typer.Option(
+            "--time-budget",
+            min=0.001,
+            help="Wall-clock budget in seconds for the whole run",
+        ),
+    ] = None,
     repo_revision: Annotated[str | None, typer.Option()] = None,
     approval_mode: Annotated[ApprovalMode, typer.Option()] = "approve_write",
     yes: Annotated[
@@ -430,6 +440,7 @@ def run_command(
             session_id=parsed_session_id,
             token_budget=token_budget,
             max_iterations=max_iterations,
+            time_budget=time_budget,
             repo_revision=repo_revision,
             approval_mode=approval_mode,
         )
@@ -636,6 +647,14 @@ def chat_command(
     ],
     token_budget: Annotated[int, typer.Option(min=1)] = 128000,
     max_iterations: Annotated[int, typer.Option(min=1, max=500)] = 20,
+    time_budget: Annotated[
+        float | None,
+        typer.Option(
+            "--time-budget",
+            min=0.001,
+            help="Wall-clock budget in seconds for each turn",
+        ),
+    ] = None,
     approval_mode: Annotated[ApprovalMode, typer.Option()] = "approve_write",
     yes: Annotated[
         bool,
@@ -760,6 +779,7 @@ def chat_command(
                     session_id=parsed_session_id,
                     token_budget=token_budget,
                     max_iterations=max_iterations,
+                    time_budget=time_budget,
                     approval_mode=approval_mode,
                 )
                 result: RunResult = await loop.run(turn)

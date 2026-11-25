@@ -2,9 +2,10 @@
 
 The loop drives a turn until the model returns a final answer (no tool calls),
 calls the ``finish`` tool successfully, a fatal error occurs, the iteration
-budget is exhausted, the token budget is exceeded, or cancellation is requested.
-Every tool call goes through the :class:`ToolRegistry`, so validation, approval,
-idempotency, timeout, and error normalization are applied uniformly.
+budget is exhausted, the token or wall-clock budget is exceeded, or
+cancellation is requested. Every tool call goes through the
+:class:`ToolRegistry`, so validation, approval, idempotency, timeout, and error
+normalization are applied uniformly.
 
 When a :class:`ShadowGit` checkpoint is attached, each iteration is snapshotted
 and the final result carries the accumulated diff. When a :class:`SessionStore`
@@ -214,6 +215,17 @@ class AgentLoop:
                         estimated_cost=self._cost(total_usage),
                     )
 
+                if self._time_exhausted(turn):
+                    return await self._failed(
+                        turn,
+                        "time budget exceeded",
+                        iterations,
+                        tool_calls,
+                        total_usage,
+                        checkpoints,
+                        resumed,
+                    )
+
                 iterations += 1
                 specs: list[ToolSpec] = self._registry.list_specs()
                 prompt = builder.build(history)
@@ -228,8 +240,32 @@ class AgentLoop:
                         checkpoints,
                         resumed,
                     )
+                remaining = self._remaining_seconds(turn)
+                if remaining is not None and remaining <= 0:
+                    return await self._failed(
+                        turn,
+                        "time budget exceeded",
+                        iterations,
+                        tool_calls,
+                        total_usage,
+                        checkpoints,
+                        resumed,
+                    )
                 model_started = time.perf_counter()
-                response: ModelResponse = await self._provider.complete(prompt, specs)
+                try:
+                    response: ModelResponse = await self._complete(
+                        prompt, specs, remaining
+                    )
+                except TimeoutError:
+                    return await self._failed(
+                        turn,
+                        "time budget exceeded",
+                        iterations,
+                        tool_calls,
+                        total_usage,
+                        checkpoints,
+                        resumed,
+                    )
                 model_duration = _duration_ms(model_started)
                 await self._emit(
                     "model_call",
@@ -642,6 +678,28 @@ class AgentLoop:
                 "estimated_cost": self._cost(usage),
             },
         )
+
+    async def _complete(
+        self,
+        prompt: list[ChatMessage],
+        specs: list[ToolSpec],
+        remaining: float | None,
+    ) -> ModelResponse:
+        """Call the provider, capping the call at the remaining time budget."""
+        if remaining is None:
+            return await self._provider.complete(prompt, specs)
+        return await asyncio.wait_for(
+            self._provider.complete(prompt, specs), timeout=remaining
+        )
+
+    def _remaining_seconds(self, turn: Turn) -> float | None:
+        if turn.time_budget is None or self._run_started is None:
+            return None
+        return self._run_started + turn.time_budget - time.perf_counter()
+
+    def _time_exhausted(self, turn: Turn) -> bool:
+        remaining = self._remaining_seconds(turn)
+        return remaining is not None and remaining <= 0
 
     def _elapsed_ms(self) -> int:
         if self._run_started is None:

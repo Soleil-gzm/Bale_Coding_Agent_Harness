@@ -14,6 +14,7 @@ class TurnRequest(BaseModel):
     max_iterations: int = Field(default=20, ge=1)
     token_budget: int = Field(gt=0)
     cost_budget: float | None = Field(default=None, ge=0)
+    time_budget: float | None = Field(default=None, gt=0)
     approval_mode: ApprovalMode = "approve_write"
 
     @field_validator("message")

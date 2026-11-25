@@ -34,6 +34,7 @@ class Turn(BaseModel):
     max_iterations: int = Field(default=20, ge=1)  # ReAct循环最大轮数下限保护
     token_budget: int = Field(gt=0)  # Token 和成本预算，gt=0 / ge=0
     cost_budget: float | None = Field(default=None, ge=0)
+    time_budget: float | None = Field(default=None, gt=0)  # 单次运行的 wall-clock 秒数
     approval_mode: ApprovalMode = "approve_write"
     status: TurnStatus = "created"  # 自定义校验：strip 后不能是空白
 

@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS turns (
     repo_revision TEXT,
     token_budget INTEGER NOT NULL,
     cost_budget REAL,
+    time_budget REAL,
     max_iterations INTEGER NOT NULL,
     approval_mode TEXT NOT NULL,
     status TEXT NOT NULL,
@@ -114,6 +115,7 @@ class TurnRecord(BaseModel):
     repo_revision: str | None = None
     token_budget: int
     cost_budget: float | None = None
+    time_budget: float | None = None
     max_iterations: int
     approval_mode: ApprovalMode
     status: TurnStatus
@@ -133,6 +135,7 @@ class TurnRecord(BaseModel):
             repo_revision=self.repo_revision,
             token_budget=self.token_budget,
             cost_budget=self.cost_budget,
+            time_budget=self.time_budget,
             max_iterations=self.max_iterations,
             approval_mode=self.approval_mode,
             status="running",
@@ -199,6 +202,11 @@ class SessionStore:
         try:
             connection.execute("PRAGMA journal_mode = WAL")
             connection.executescript(SCHEMA)
+            columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(turns)")
+            }
+            if "time_budget" not in columns:
+                connection.execute("ALTER TABLE turns ADD COLUMN time_budget REAL")
         finally:
             connection.close()
 
@@ -255,9 +263,9 @@ class SessionStore:
             now = _now()
             connection.execute(
                 "INSERT INTO turns (turn_id, session_id, message, workspace,"
-                " repo_revision, token_budget, cost_budget, max_iterations,"
-                " approval_mode, status, created_at, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " repo_revision, token_budget, cost_budget, time_budget,"
+                " max_iterations, approval_mode, status, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     str(turn.turn_id),
                     str(turn.session_id),
@@ -266,6 +274,7 @@ class SessionStore:
                     turn.repo_revision,
                     turn.token_budget,
                     turn.cost_budget,
+                    turn.time_budget,
                     turn.max_iterations,
                     turn.approval_mode,
                     "running",
@@ -755,6 +764,7 @@ def _turn_record(row: sqlite3.Row) -> TurnRecord:
         repo_revision=row["repo_revision"],
         token_budget=row["token_budget"],
         cost_budget=row["cost_budget"],
+        time_budget=row["time_budget"],
         max_iterations=row["max_iterations"],
         approval_mode=row["approval_mode"],
         status=row["status"],
