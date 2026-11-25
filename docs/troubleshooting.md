@@ -229,6 +229,12 @@ BALE_RETRIEVAL_TOP_K=2 bale run ...           # 减少片段
 
 检索只按当前用户消息召回，不感知历史；片段被标注为 untrusted，模型仍需用工具核实。
 
+### Turn 因预算失败
+
+- `error` 为 `token budget exceeded`：提高 `--token-budget` / `token_budget`，或减少检索片段与工具输出。
+- `error` 为 `time budget exceeded`：提高 `--time-budget` / `time_budget`。慢模型或大量工具迭代会先耗尽 wall-clock；已启动的工具仍按各自 `timeout_ms` 收尾或取消。
+- `error` 为 `max iterations (...) reached`：提高 `--max-iterations`，或让模型更早调用 `finish`。
+
 ### `bale eval` 失败或退出码为 1
 
 - `no tasks in ...`：任务文件为空或目录下没有 `tasks.json`。

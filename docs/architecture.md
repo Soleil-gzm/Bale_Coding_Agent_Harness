@@ -4,7 +4,7 @@
 
 本文同时记录两类内容：
 
-- **当前实现**：B0 工程骨架、Turn/ToolResult 契约、Settings、ModelProvider/FakeProvider、共享 Turn 构造入口；B1 只读 ReAct 运行时（AgentLoop、ToolRegistry、只读内置工具、Workspace 路径防护与 `bale run` 入口）；B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、LocalSandbox、审批策略、ShadowGit 快照与调用幂等）；B3 上下文与会话运行时（Token 预算、历史裁剪、稳定系统前缀、SQLite Session、`after_turn` 记忆、取消与恢复）；B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）；B5 运行报告（Session/Trace 到 Markdown）；B6 本地闭环增强（持久化 Checkpoint 与 `bale undo`、`bale session`/`bale trace` 检查命令、`bale chat` 多轮交互、`move_file`/`delete_file`/`apply_patch`、OpenAI 兼容 Provider、`py.typed`）；B7 HTTP 执行与 SSE（`POST /v1/runs`、`POST /v1/runs/stream`），并补齐 `/health`、可选 Bearer 认证、`run_id` 指定与协作式取消；B8 检索与评测（AST/行窗口 BM25、OpenAI 兼容向量召回与混合排序、基于文件签名的增量索引与 JSON 快照、`bale search`、`bale eval`）；B9 stdio MCP 工具适配，并在 `bale chat` 与 HTTP lifespan 内复用会话，`Bm25Retriever` 在每次 Turn 自动注入检索证据；以及可独立运行的 FastMCP 文件写入示例；B10 HTTP 生产化（多 Key principal/scope、内存限流、SQLite Session 复用、HTTP 审批、JSONL 审计）与 Docker 执行沙箱。
+- **当前实现**：B0 工程骨架、Turn/ToolResult 契约、Settings、ModelProvider/FakeProvider、共享 Turn 构造入口；B1 只读 ReAct 运行时（AgentLoop、ToolRegistry、只读内置工具、Workspace 路径防护与 `bale run` 入口）；B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、LocalSandbox、审批策略、ShadowGit 快照与调用幂等）；B3 上下文与会话运行时（Token 与 wall-clock 预算、历史裁剪、稳定系统前缀、SQLite Session、`after_turn` 记忆、取消与恢复）；B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）；B5 运行报告（Session/Trace 到 Markdown）；B6 本地闭环增强（持久化 Checkpoint 与 `bale undo`、`bale session`/`bale trace` 检查命令、`bale chat` 多轮交互、`move_file`/`delete_file`/`apply_patch`、OpenAI 兼容 Provider、`py.typed`）；B7 HTTP 执行与 SSE（`POST /v1/runs`、`POST /v1/runs/stream`），并补齐 `/health`、可选 Bearer 认证、`run_id` 指定与协作式取消；B8 检索与评测（AST/行窗口 BM25、OpenAI 兼容向量召回与混合排序、基于文件签名的增量索引与 JSON 快照、`bale search`、`bale eval`）；B9 stdio MCP 工具适配，并在 `bale chat` 与 HTTP lifespan 内复用会话，`Bm25Retriever` 在每次 Turn 自动注入检索证据；以及可独立运行的 FastMCP 文件写入示例；B10 HTTP 生产化（多 Key principal/scope、内存限流、SQLite Session 复用、HTTP 审批、JSONL 审计）与 Docker 执行沙箱。
 - **目标架构**：Coding Agent Harness 的后续设计方向，用于约束模块边界和扩展方式。
 
 除特别注明外，带有“规划”“目标”或“后续”标识的模块均未在当前仓库实现。文档中的目标接口是逻辑契约，不代表已有 Python 类或稳定 API。
@@ -104,7 +104,7 @@ flowchart LR
 | `agent/trace.py` | `TraceEvent`、`TraceExporter` 协议、`JsonlTraceExporter` 与 `NullTraceExporter`：追加写、序号递增、脱敏、失败不阻断 | 本地 JSONL，无轮转、采样或远程导出 |
 | `agent/cost.py` | `CostRates` 与 `estimate_cost`：按每千 token 费率估算成本 | 不内置默认价格，结果不是 Provider 账单 |
 | `agent/report.py` | `build_report`：Session、已执行调用、记忆与 Trace 汇总为 Markdown | 只读投影，不调用模型、不改 Session |
-| `agent/loop.py` | ReAct 循环、终止/取消/迭代与 token 预算、上下文重建、检索注入、Session 持久化、恢复、Trace 埋点、耗时与成本与 Diff 聚合 | 无远程 Trace 导出 |
+| `agent/loop.py` | ReAct 循环、终止/取消/迭代与 token 及 wall-clock 预算、上下文重建、检索注入、Session 持久化、恢复、Trace 埋点、耗时与成本与 Diff 聚合 | 无远程 Trace 导出 |
 | `repo_index/index.py` | `chunk_source`：Python 顶层定义优先、行窗口回退；`Bm25Index`、`scores` 与 `SearchHit` | 纯词法基线，不读取磁盘快照 |
 | `repo_index/hybrid.py` | `HybridIndex`：BM25 与向量分数归一化融合、按文件签名增量重建、可选 JSON 快照、embedding 失败降级 | 同步实现，索引构建发生在调用线程 |
 | `repo_index/embedding.py` | `Embedder` 协议、`OpenAIEmbedder` 与 `create_embedder`：标准库 `urllib` 调用 OpenAI 兼容 `/embeddings` | 不引入第三方向量库；远程端点缺少 Key 时返回 `None` |
@@ -251,11 +251,11 @@ flowchart TB
 |---|---|
 | 身份 | `turn_id`、`session_id` 为 UUID，默认分别使用 `uuid4` |
 | 输入 | 非空且去除首尾空白的 `message`、`workspace: Path`、可选 `repo_revision` |
-| 预算 | `max_iterations=20` 且至少为 1、`token_budget > 0`、`cost_budget=None` 且设置时非负 |
+| 预算 | `max_iterations=20` 且至少为 1、`token_budget > 0`、`cost_budget=None` 且设置时非负、`time_budget=None` 且设置时为正的秒数 |
 | 权限 | `auto_read`、`approve_write`、`approve_all`，默认 `approve_write` |
 | 状态 | `created`、`running`、`waiting_approval`、`completed`、`failed`、`cancelled`，默认 `created` |
 
-Turn 禁止未知字段并支持 JSON 序列化/反序列化。构造 Turn 不会创建 workspace；时间预算仍未实现，已执行调用 ID 与恢复位置由 B3 的 `SessionStore` 持久化。
+Turn 禁止未知字段并支持 JSON 序列化/反序列化。构造 Turn 不会创建 workspace；`time_budget` 由 `AgentLoop` 在运行期强制执行，已执行调用 ID 与恢复位置由 B3 的 `SessionStore` 持久化。
 
 CLI 与 HTTP 通过唯一的 `build_turn()` 构造 Turn，避免入口行为不一致。审批模式和后续状态当前只是数据契约，不表示已有审批或状态机执行逻辑。
 
@@ -318,6 +318,7 @@ available_history = context_window
 B3 的实际实现：
 
 - `turn.token_budget` 表示本 Turn 累计 `total_tokens` 上限；上下文窗口由 `BALE_CONTEXT_WINDOW`（默认 128000）单独控制。
+- `turn.time_budget` 表示本次执行的 wall-clock 上限（秒）。Loop 在每个迭代边界检查剩余时间，并用剩余时间包裹单次模型调用；超时以 `failed` 与 `error="time budget exceeded"` 结束。工具调用仍受各自 `timeout_ms` 约束，已启动的工具不会被额外中断；恢复执行会从恢复时刻重新计算预算。
 - Token 数为确定性估算：`ceil(len(text) / 3)` 加固定消息开销，不是 Provider 计费值。
 - `available_history` 使用上述公式并夹到零；固定前缀与当前 Turn 仍超窗时返回失败，不发送残缺请求。
 - `HistoryTrimmer` 先压缩超长 tool 输出（默认 4000 字符），再从最旧 Turn 整组丢弃，最新 Turn 始终保留。
@@ -401,7 +402,7 @@ B3 的实际实现：
 
 ## 11. 测试与验证设计
 
-当前 pytest 覆盖契约、配置、FakeProvider、CLI/HTTP 同构、输入校验，以及 B1 的消息契约、路径防护、工具注册器、只读内置工具、ReAct 循环和 CLI run 端到端，B2a 的审批策略、Sandbox 防护、ShadowGit 快照、写入/编辑与执行工具、幂等与「写代码→跑测试→finish」闭环，以及 B3 的 token 估算、预算非负、按 Turn 裁剪与消息配对、稳定前缀、SQLite Session 往返与事务回滚、`after_turn` 记忆、取消落库、Case C 恢复不重复写入和 CLI `--resume`，B4 的 JSONL 事件顺序、追加写入、脱敏与失败不阻断、成本估算和 `--trace`，B5 的 Session 列表顺序、Trace 回读、Markdown 报告内容与 `bale report`，B6 的 Session 汇总、Checkpoint 跨进程基线复用、`bale session`/`bale trace`/`bale chat`/`bale undo`、扩展写入工具、OpenAI 兼容 Provider 的请求映射/解析/重试/脱敏与本地端点免 Key 配置，以及 B8 的标识符分词、BM25 排序、隐藏/二进制文件过滤、`search_code`/`bale search`、任务文件校验、fixture 复制隔离、文件断言和 Markdown/JSON 评测报告，B9 的 MCP 配置校验、工具名与 `inputSchema` 映射、必填参数校验、写/只读治理、`mcp_error`/`mcp_tool_error` 归一化、stdio 往返和 `bale run --mcp-config`；MCP 示例可通过客户端执行初始化、`list_tools` 和 `call_tool`，并检查输出文件内容。HTTP 生产化覆盖 `/health` 公开性、Bearer 认证的 401/200、`X-Run-Id`、未知 `run_id` 取消 404、SSE 运行中取消与结果清理；MCP 接入覆盖 `bale chat` 跨 Turn 复用会话、HTTP lifespan 挂载与损坏配置启动失败；检索覆盖 AST 切块/装饰器/语法回退、`top_k` 与字符上限、`Bm25Retriever` 排序、向量独有命中、embedding 失败退回 BM25、增量复用/新增/修改/删除、JSON 快照跨实例复用与损坏快照忽略，以及 Loop 将片段注入系统前缀且检索失败不阻断 Turn。基础检查命令为：
+当前 pytest 覆盖契约、配置、FakeProvider、CLI/HTTP 同构、输入校验，以及 B1 的消息契约、路径防护、工具注册器、只读内置工具、ReAct 循环和 CLI run 端到端，B2a 的审批策略、Sandbox 防护、ShadowGit 快照、写入/编辑与执行工具、幂等与「写代码→跑测试→finish」闭环，以及 B3 的 token 估算、预算非负、按 Turn 裁剪与消息配对、稳定前缀、SQLite Session 往返与事务回滚、`after_turn` 记忆、取消落库、Case C 恢复不重复写入和 CLI `--resume`，B4 的 JSONL 事件顺序、追加写入、脱敏与失败不阻断、成本估算和 `--trace`，B5 的 Session 列表顺序、Trace 回读、Markdown 报告内容与 `bale report`，B6 的 Session 汇总、Checkpoint 跨进程基线复用、`bale session`/`bale trace`/`bale chat`/`bale undo`、扩展写入工具、OpenAI 兼容 Provider 的请求映射/解析/重试/脱敏与本地端点免 Key 配置，以及 B8 的标识符分词、BM25 排序、隐藏/二进制文件过滤、`search_code`/`bale search`、任务文件校验、fixture 复制隔离、文件断言和 Markdown/JSON 评测报告，B9 的 MCP 配置校验、工具名与 `inputSchema` 映射、必填参数校验、写/只读治理、`mcp_error`/`mcp_tool_error` 归一化、stdio 往返和 `bale run --mcp-config`；MCP 示例可通过客户端执行初始化、`list_tools` 和 `call_tool`，并检查输出文件内容。HTTP 生产化覆盖 `/health` 公开性、Bearer 认证的 401/200、`X-Run-Id`、未知 `run_id` 取消 404、SSE 运行中取消与结果清理；MCP 接入覆盖 `bale chat` 跨 Turn 复用会话、HTTP lifespan 挂载与损坏配置启动失败；时间预算覆盖正数校验、迭代边界检查、慢模型调用超时、Session 持久化与旧表迁移；检索覆盖 AST 切块/装饰器/语法回退、`top_k` 与字符上限、`Bm25Retriever` 排序、向量独有命中、embedding 失败退回 BM25、增量复用/新增/修改/删除、JSON 快照跨实例复用与损坏快照忽略，以及 Loop 将片段注入系统前缀且检索失败不阻断 Turn。基础检查命令为：
 
 ```bash
 ruff check src tests

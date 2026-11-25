@@ -95,6 +95,7 @@ Provider 只实现非流式 Chat Completions，`temperature=0`；不支持流式
 |---|---|---|
 | `BALE_CONTEXT_WINDOW` | 单次模型调用的上下文 | 超限时由 `HistoryTrimmer` 按整 Turn 裁剪，并保持 assistant 工具调用与 tool 结果配对 |
 | `--token-budget`（CLI） / `token_budget`（HTTP） | 整个 Turn 的累计 token | 与上下文窗口相互独立；达到预算后 Turn 以预算错误结束 |
+| `--time-budget`（CLI） / `time_budget`（HTTP） | 整个 Turn 的 wall-clock 秒数 | 迭代边界检查剩余时间，并用剩余时间限制单次模型调用；超时以 `time budget exceeded` 失败。工具调用仍受各自 `timeout_ms` 限制 |
 | `--max-iterations` | ReAct 迭代次数 | CLI 与 HTTP 都限制在 1–500，默认 20 |
 | `--cost-budget`（仅 CLI） | Turn 的成本预算字段 | 当前只随 Turn 记录，运行循环**不做**成本上限拦截；成本估算仍取决于下面的费率 |
 | `BALE_INPUT_COST_PER_1K` + `BALE_OUTPUT_COST_PER_1K` | 成本估算 | 只填一项时 `estimated_cost` 保持 `null` |
@@ -250,7 +251,7 @@ export BALE_EMBEDDING_API_KEY=sk-...
 | `--mcp-config` | `BALE_MCP_CONFIG`（仅 HTTP 使用） | 挂载 stdio MCP 服务器 |
 | `--approval-mode` / `--yes` | 无环境变量 | 控制写与执行审批 |
 | `--shadow-git` / `--no-shadow-git` | 无环境变量 | 默认开启快照 |
-| `--max-iterations`、`--token-budget`、`--cost-budget` | 无环境变量 | 单次运行预算 |
+| `--max-iterations`、`--token-budget`、`--time-budget`、`--cost-budget` | 无环境变量 | 单次运行预算；`--time-budget` 单位为秒，必须大于 0 |
 
 ## 10. 校验失败与安全处理
 

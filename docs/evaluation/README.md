@@ -49,6 +49,7 @@ passed 2/2 (failed 0, errors 0)
       "message": "In greetings.py, update greet() so it returns a message starting with 'hello'.",
       "max_iterations": 6,
       "token_budget": 128000,
+      "time_budget": 120,
       "checks": [
         {"type": "file_exists", "path": "greetings.py"},
         {"type": "file_contains", "path": "greetings.py", "value": "hello"},
@@ -67,6 +68,7 @@ passed 2/2 (failed 0, errors 0)
 | `message` | 是 | 传给 Agent 的用户消息 |
 | `max_iterations` | 否 | 默认 8，必须 ≥1 |
 | `token_budget` | 否 | 默认 128000 |
+| `time_budget` | 否 | wall-clock 秒数，必须 >0；超时任务记为 `failed`，`error` 为 `time budget exceeded` |
 | `checks` | 否 | 未通过任一检查即 `failed`；没有检查则只看运行状态 |
 
 检查类型：

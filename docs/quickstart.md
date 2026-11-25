@@ -98,7 +98,7 @@ bale turn \
   --token-budget 4096
 ```
 
-命令向标准输出写入一个 Turn JSON。默认生成随机 `turn_id` 和 `session_id`，状态为 `created`，`max_iterations` 为 20，`approval_mode` 为 `approve_write`。可通过 `--repo-revision`、`--max-iterations`、`--cost-budget` 和 `--approval-mode` 覆盖相应输入。
+命令向标准输出写入一个 Turn JSON。默认生成随机 `turn_id` 和 `session_id`，状态为 `created`，`max_iterations` 为 20，`approval_mode` 为 `approve_write`。可通过 `--repo-revision`、`--max-iterations`、`--token-budget`、`--time-budget`、`--cost-budget` 和 `--approval-mode` 覆盖相应输入。
 
 该命令只构造和校验 Turn，不创建 workspace，不调用 `FakeProvider.complete()`，也不执行任何工具。
 
@@ -130,7 +130,7 @@ bale run --message "Inspect the repository" --workspace "$PWD"
 }
 ```
 
-退出码：`completed` 为 0，`failed` 或 `cancelled` 为 1。可用 `--max-iterations` 限制循环次数，`--token-budget` 设置预算。所有路径都受 `WorkspaceGuard` 防护，无法逃逸工作区。
+退出码：`completed` 为 0，`failed` 或 `cancelled` 为 1。可用 `--max-iterations` 限制循环次数，`--token-budget` 设置 token 预算，`--time-budget <秒>` 限制整个 Turn 的 wall-clock 时间（超时返回 `time budget exceeded`）。所有路径都受 `WorkspaceGuard` 防护，无法逃逸工作区。
 
 ### 4.2 修改代码并运行测试
 
@@ -199,6 +199,7 @@ bale run \
 - 执行前已记录 `pending`、但没有结果的调用不会被重放，而是合成 `outcome_unknown` 的 tool 消息回注模型。
 - 每个 Turn 完成（`completed`）后写入一条有界记忆摘要；下个 Turn 的稳定系统前缀会包含最近 5 条。
 - Token 预算分两层：`turn.token_budget`（累计 `total_tokens` 上限）与 `BALE_CONTEXT_WINDOW`（上下文窗口裁剪）。Token 数为确定性估算，不等于 Provider 计费值。
+- `turn.time_budget` 是 wall-clock 上限（秒，必须大于 0）。Loop 在迭代边界检查，并用剩余时间限制单次模型调用；超时以 `failed` 和 `time budget exceeded` 结束，工具调用仍受各自 `timeout_ms` 约束。
 - 传入 `--session-db` 或 `--checkpoint-dir` 时，ShadowGit git-dir 会持久化到 `<session_db 父目录>/checkpoints/<session_id>`；否则仍使用进程临时目录。
 
 ### 4.4 追踪与成本
@@ -434,6 +435,7 @@ curl -X POST http://127.0.0.1:8000/v1/runs \
     "workspace": "/absolute/path/workspace",
     "token_budget": 4096,
     "max_iterations": 4,
+    "time_budget": 120,
     "approve_writes": false,
     "shadow_git": false
   }'
