@@ -239,7 +239,7 @@ flowchart TB
 | `providers/` | 真实模型调用、结构化输出和用量 | 当前 ModelProvider 端口 |
 | `server/` | HTTP Session、审批、限流和更多健康检查 | Runtime、现有 `http.py` 执行入口 |
 | `tracing/` | Span、错误、Token、延迟和成本 | 无 Runtime 反向依赖 |
-| `eval/` | 固定任务、确定性验证和报告 | CLI、Workspace、Verifier |
+| `eval/` | 固定任务、确定性验证和报告；任务命令可按配置运行在 Local/Docker Sandbox | CLI、Workspace、Verifier、Sandbox |
 
 这些路径用于说明职责边界。B1 已实现 `agent/loop.py`、`agent/context.py`（最小前缀）、`agent/tools/registry.py`、`agent/tools/builtin.py`（只读工具）和 `agent/security.py`；B2a 已实现 `agent/approval.py`、`agent/sandbox.py`（LocalSandbox）、`agent/checkpoint.py`（ShadowGit）、`agent/tools/write.py`、`agent/tools/exec.py` 与 `agent/tools/git.py`；B3 已实现 `agent/history.py`、完整的 `agent/context.py`、`agent/session.py` 与 `agent/memory.py`；B4 已实现 `agent/trace.py` 与 `agent/cost.py`；B5 已实现 `agent/report.py`；B6 已实现 `providers_openai.py`、Checkpoint 持久化/`undo`、`session`/`trace`/`chat` CLI 与扩展写入工具；B7 已实现 `http.py` 的执行、SSE、健康检查、Bearer 认证与 `run_id` 取消；B8 已实现 `repo_index/`（AST/行窗口 BM25、`HybridIndex` 向量混合与增量快照、`Bm25Retriever` 自动注入与 `search_code`/`bale search`）和 `eval/`（固定任务、确定性文件断言与 `bale eval`）；B9 已实现 `agent/tools/mcp.py`（stdio 连接、分页 `list_tools`、工具命名空间与 `call_tool` 适配，`bale run`/`bale chat`/HTTP 接入）；B10 已实现 `http_support.py`（多 Key principal/scope、内存限流、SQLite Session 门禁、HTTP 审批 Broker、JSONL 审计）、`http.py` 的 Markdown 报告端点与 `DockerSandbox`；其余模块（如 Knowledge Retriever、多副本共享状态）仍为规划，不能当作已有能力。后续实现时应以实际代码和测试为准更新本文。
 

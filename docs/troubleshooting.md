@@ -251,6 +251,8 @@ BALE_RETRIEVAL_TOP_K=2 bale run ...           # 减少片段
 - `no tasks in ...`：任务文件为空或目录下没有 `tasks.json`。
 - `fixture not found: ...`：`fixture` 路径相对于任务文件所在目录解析，检查目录名。
 - FakeProvider 只会返回脚本化文本，无法真正修改文件，因此固定任务通常失败；评测真实能力需要配置真实 Provider。
+- `docker executable not found; install Docker or use --sandbox local`：要求 `--sandbox docker` 但宿主机没有 `docker`。安装并确认 `docker version` 可用，或改用 `--sandbox local`。
+- Docker 模式下容器以非 root 用户访问挂载的工作区；Linux 上若任务无法写文件，检查 `BALE_SANDBOX_USER` 与挂载目录权限。
 - 退出码 1 表示有任务未通过，不等于 harness 崩溃；报告中的 `error` 才是执行异常。
 
 ## 收集诊断信息

@@ -191,6 +191,8 @@ CLI 也可以单次覆盖：
 
 ```bash
 bale run --sandbox docker --sandbox-image my-project/runner:latest ...
+bale eval --tasks examples/eval/tasks.json --sandbox docker \
+  --sandbox-image my-project/runner:latest
 ```
 
 容器默认配置：
@@ -205,7 +207,7 @@ bale run --sandbox docker --sandbox-image my-project/runner:latest ...
 
 使用要求：
 
-- 宿主机必须能直接执行 `docker`；Bale 自身运行在容器内时，需要额外安装 Docker CLI 并挂载 socket，部署镜像默认不包含；
+- 宿主机必须能直接执行 `docker`；Bale 自身运行在容器内时，需要额外安装 Docker CLI 并挂载 socket，部署镜像默认不包含。`bale eval --sandbox docker` 在启动前检查 `docker` 可执行文件，缺失时直接报参数错误；
 - 镜像里必须有命令需要的运行时。`run_tests` 通过镜像内的 `python -m pytest` 执行，因此默认 `python:3.11-slim` 只能运行 `shell` 类命令，不能直接跑 pytest；
 - `/workspace` 的写权限由 `BALE_SANDBOX_USER` 与宿主挂载权限共同决定。Linux 上可执行 `sudo chown -R 10001:10001 <workspace>`，或把 `BALE_SANDBOX_USER` 设为当前 UID/GID；
 - 只读根文件系统会阻止容器内 `pip install`、写 `/app` 等操作；需要构建依赖时请预构建镜像。

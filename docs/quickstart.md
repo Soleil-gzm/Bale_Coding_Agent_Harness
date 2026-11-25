@@ -386,7 +386,8 @@ bale eval \
 - 评测自动批准写与执行，fixture 必须视为可信输入；原始 fixture 不会被修改。
 - 每个任务使用独立的 Provider 实例；Markdown 默认写到标准输出，`--json` 额外写机器可读报告。
 - 任一任务 `failed` 或 `error` 时命令返回非零退出码。默认 `BALE_PROVIDER=fake` 只返回固定答案，通常无法满足断言；真实完成率需要配置 Ollama/DeepSeek 等 Provider。
-- 当前只做文件级确定性检查，不执行 fixture 内测试、不比较 Diff，也不包含 Docker 隔离。
+- `--sandbox docker`（或 `BALE_SANDBOX_BACKEND=docker`）让任务中的 `shell`/`run_tests` 在一次性容器内执行，镜像由 `--sandbox-image` / `BALE_SANDBOX_IMAGE` 指定；缺少 `docker` 可执行文件时命令直接失败，不会静默退回本机。文件写入工具仍在宿主进程内运行，临时工作区的挂载写权限要求与 `bale run` 相同。
+- 当前只做文件级确定性检查，不执行 fixture 内测试、不比较 Diff，也不做模型评分。
 
 ### 4.11 MCP 工具接入
 

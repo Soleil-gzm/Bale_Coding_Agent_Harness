@@ -70,6 +70,7 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - `bale run`/`bale chat`/HTTP 默认在每次 Turn 按用户消息检索，并把有限片段作为独立的 untrusted 段落注入系统前缀；`BALE_RETRIEVAL_*` 与 `BALE_EMBEDDING_*` 控制开关、条数、混合权重与索引快照。
 - `bale eval --tasks examples/eval/tasks.json` 读取固定 JSON 任务，把每个 fixture 复制到临时工作区后运行完整 ReAct 闭环，再用 `file_exists`、`file_not_exists`、`file_contains`、`file_not_contains` 做确定性验证。
 - 评测默认自动批准写与执行（fixture 视为可信）；`--output` 写 Markdown，`--json` 写 JSON，存在失败或错误时命令以非零状态退出，可用于 CI。
+- `bale eval --sandbox docker` 让任务中的 `shell`/`run_tests` 在容器内执行，复用 `BALE_SANDBOX_*` 限额；缺少 docker 可执行文件时直接报错，不会静默退回本机执行。
 
 ### 运行报告
 
@@ -115,7 +116,7 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - Checkpoint 目录已可持久化，支持 `bale undo` 恢复以及 `bale checkpoint list/clean` 浏览与清理，但依赖本机 `git`。
 - Trace 为本地追加 JSONL，无轮转、采样或远程导出；`estimated_cost` 只是按配置费率的估算，不代表 Provider 账单。
 - 运行报告是只读 Markdown 投影，提供 CLI 与 HTTP（`GET /v1/runs/{run_id}/report`）入口，不调用模型、不执行工具，也不包含 HTML/PDF 导出。
-- 检索默认是无第三方依赖的 BM25 词法排序（Python 按顶层定义切块，其余按行窗口），可选叠加 OpenAI 兼容 embedding 的向量召回与按文件签名的增量索引；向量端点不可用时会退回 BM25。评测只执行 JSON 固定任务与文件级断言，不包含 Docker 隔离、自动生成任务或模型评分。
+- 检索默认是无第三方依赖的 BM25 词法排序（Python 按顶层定义切块，其余按行窗口），可选叠加 OpenAI 兼容 embedding 的向量召回与按文件签名的增量索引；向量端点不可用时会退回 BM25。评测只执行 JSON 固定任务与文件级断言，可选用 Docker 沙箱执行任务命令，不包含自动生成任务或模型评分。
 - MCP 只支持 stdio transport；`bale run` 每次重建会话，`bale chat` 与 HTTP 入口在各自生命周期内复用一个会话，不包含 SSE/HTTP transport、工具缓存、工具级审批界面或跨进程会话复用。`read_only` 是调用方声明，不代表服务器已被隔离。
 - HTTP 接口提供 Bearer 认证（多 Key + `read`/`write` scope）、内存限流、SQLite Session、HTTP 审批、JSONL 审计、Markdown 报告端点、`run_id` 指定与协作式取消；没有 TLS、多副本共享状态或按工具/路径的 ACL，`approve_writes=true` 只应由可信调用方使用。
 - 自动检索按用户消息在每次 Turn 注入有限片段，不感知对话历史，也不保证召回完整；检索异常时静默跳过，不阻断 Turn。
