@@ -12,8 +12,11 @@ Snapshots use git plumbing only; no branch in the user's repository moves.
 import asyncio
 import os
 import shutil
+import stat
 import tempfile
 from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict
 
 GIT_CONFIG = (
     "-c",
@@ -29,6 +32,26 @@ GIT_CONFIG = (
 
 class ShadowGitError(Exception):
     """Raised when a shadow git operation cannot be completed."""
+
+
+class Snapshot(BaseModel):
+    """One commit stored in a shadow git checkpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    commit: str
+    created_at: str
+    message: str
+
+
+def _rmtree(path: Path) -> None:
+    """Remove ``path`` even when git object files are read-only on Windows."""
+
+    def _retry(func, target, _exc) -> None:
+        os.chmod(target, stat.S_IWRITE)
+        func(target)
+
+    shutil.rmtree(path, onerror=_retry)
 
 
 class ShadowGit:
@@ -203,6 +226,39 @@ class ShadowGit:
         await self._git("checkout", target, "--", ".")
         await self._git("clean", "-fd", "--", ".")
 
+    async def list_snapshots(self) -> list[Snapshot]:
+        """Return snapshot commits newest first without touching the workspace.
+
+        An absent or uninitialized checkpoint yields an empty list instead of
+        an error, so inspection commands stay read-only and cheap.
+        """
+        if self._git_dir is None or not (self._git_dir / "HEAD").exists():
+            return []
+        code, stdout, stderr = await self._git(
+            "log", "--format=%H%x09%aI%x09%s", check=False
+        )
+        if code != 0:
+            detail = stderr.strip() or stdout.strip() or f"exit code {code}"
+            raise ShadowGitError(f"git log failed: {detail}")
+        snapshots: list[Snapshot] = []
+        for line in stdout.splitlines():
+            if not line.strip():
+                continue
+            commit, created_at, message = line.split("\t", 2)
+            snapshots.append(
+                Snapshot(commit=commit, created_at=created_at, message=message)
+            )
+        return snapshots
+
+    async def remove(self) -> None:
+        """Delete the checkpoint directory and every snapshot stored in it."""
+        if self._git_dir is None:
+            raise ShadowGitError("shadow repository has not been initialized")
+        if self._git_dir.exists():
+            _rmtree(self._git_dir)
+        self._initialized = False
+        self._baseline = None
+
     async def cleanup(self) -> None:
         """Remove the private git directory when this instance created it."""
         if (
@@ -211,5 +267,8 @@ class ShadowGit:
             and self._git_dir is not None
             and self._git_dir.exists()
         ):
-            shutil.rmtree(self._git_dir, ignore_errors=True)
+            try:
+                _rmtree(self._git_dir)
+            except OSError:
+                pass  # best effort: leftover temp dirs must not fail the run
         self._initialized = False

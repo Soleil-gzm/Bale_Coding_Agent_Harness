@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 import typer
 
 from bale_harness.agent.approval import Decider, auto_approve
-from bale_harness.agent.checkpoint import ShadowGit
+from bale_harness.agent.checkpoint import ShadowGit, ShadowGitError
 from bale_harness.agent.cost import CostRates
 from bale_harness.agent.loop import AgentLoop, RunResult, build_default_loop
 from bale_harness.agent.messages import ToolCall, ToolSpec
@@ -42,6 +42,10 @@ from bale_harness.turns import TurnRequest, build_turn
 app = typer.Typer(no_args_is_help=True)
 session_app = typer.Typer(no_args_is_help=True, help="Inspect persisted sessions.")
 app.add_typer(session_app, name="session")
+checkpoint_app = typer.Typer(
+    no_args_is_help=True, help="Inspect and clean shadow git checkpoints."
+)
+app.add_typer(checkpoint_app, name="checkpoint")
 
 
 def _console_decider(call: ToolCall, spec: ToolSpec) -> bool:
@@ -838,3 +842,115 @@ def undo_command(
         raise typer.Exit(code=1)
     target = asyncio.run(_restore(ShadowGit(workspace, directory), snapshot))
     typer.echo(f"restored {workspace} to {target}")
+
+
+def _checkpoint_target(
+    workspace: Path,
+    session_id: str,
+    session_db: Path | None,
+    checkpoint_dir: Path | None,
+) -> Path:
+    """Resolve the persistent checkpoint directory shared by the CLI commands."""
+    if checkpoint_dir is None and session_db is None:
+        raise typer.BadParameter("--checkpoint-dir or --session-db is required")
+    parsed = _parse_session_id(session_id)
+    return _checkpoint_dir(session_db or Path.cwd(), parsed, workspace, checkpoint_dir)
+
+
+def _open_checkpoint(workspace: Path, directory: Path) -> ShadowGit:
+    try:
+        return ShadowGit(workspace, directory)
+    except ShadowGitError as error:
+        raise typer.BadParameter(str(error)) from error
+
+
+@checkpoint_app.command("list")
+def checkpoint_list(
+    workspace: Annotated[
+        Path,
+        typer.Option(
+            ...,
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            readable=True,
+            resolve_path=True,
+            help="Workspace the checkpoint belongs to",
+        ),
+    ],
+    session_id: Annotated[str, typer.Option(help="Session identifier (UUID)")],
+    session_db: Annotated[
+        Path | None,
+        typer.Option(help="Session database used to derive the checkpoint directory"),
+    ] = None,
+    checkpoint_dir: Annotated[
+        Path | None, typer.Option(help="Checkpoint directory to inspect")
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """List snapshot commits stored in a shadow git checkpoint."""
+    directory = _checkpoint_target(workspace, session_id, session_db, checkpoint_dir)
+    try:
+        snapshots = asyncio.run(_open_checkpoint(workspace, directory).list_snapshots())
+    except ShadowGitError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from error
+    if json_output:
+        typer.echo(
+            json.dumps(
+                [snapshot.model_dump(mode="json") for snapshot in snapshots],
+                ensure_ascii=False,
+            )
+        )
+        return
+    if not snapshots:
+        typer.echo(f"no checkpoints at {directory}")
+        return
+    typer.echo(f"{len(snapshots)} snapshot(s) at {directory}")
+    for snapshot in snapshots:
+        typer.echo(f"{snapshot.commit[:12]}  {snapshot.created_at}  {snapshot.message}")
+
+
+@checkpoint_app.command("clean")
+def checkpoint_clean(
+    workspace: Annotated[
+        Path,
+        typer.Option(
+            ...,
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            readable=True,
+            resolve_path=True,
+            help="Workspace the checkpoint belongs to",
+        ),
+    ],
+    session_id: Annotated[str, typer.Option(help="Session identifier (UUID)")],
+    session_db: Annotated[
+        Path | None,
+        typer.Option(help="Session database used to derive the checkpoint directory"),
+    ] = None,
+    checkpoint_dir: Annotated[
+        Path | None, typer.Option(help="Checkpoint directory to delete")
+    ] = None,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Delete without asking for confirmation")
+    ] = False,
+) -> None:
+    """Delete every snapshot stored in a shadow git checkpoint directory."""
+    directory = _checkpoint_target(workspace, session_id, session_db, checkpoint_dir)
+    if not (directory / "HEAD").exists():
+        typer.echo(f"no checkpoints at {directory}")
+        return
+    if directory == workspace or workspace.is_relative_to(directory):
+        raise typer.BadParameter(
+            f"refusing to remove {directory}: it contains the workspace"
+        )
+    if not yes and not typer.confirm(f"Delete checkpoints at {directory}?"):
+        raise typer.Exit(code=1)
+    try:
+        asyncio.run(_open_checkpoint(workspace, directory).remove())
+    except ShadowGitError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo(f"removed {directory}")
