@@ -227,6 +227,7 @@ bale run \
 - `--resume` 会向同一文件追加事件，`seq` 从新运行重新计数。
 - 同时配置 `BALE_INPUT_COST_PER_1K` 与 `BALE_OUTPUT_COST_PER_1K` 后，`turn_finished.data.estimated_cost` 与 `RunResult.estimated_cost` 才有数值；它是估算，不是 Provider 账单。
 - 追踪写入失败（目录不可写、目标为目录等）只会跳过 trace，不影响 Turn 结果。
+- `BALE_TRACE_MAX_BYTES`（默认 0，不轮转）大于 0 时，写入前检查大小并轮转为 `trace.jsonl.1`…`.N`；`BALE_TRACE_BACKUPS` 控制保留的备份数（默认 3）。`bale trace` 只读取当前文件，历史事件在备份文件中。
 
 ### 4.5 生成运行报告
 

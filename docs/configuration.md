@@ -26,6 +26,8 @@ CLI 参数 > 进程环境变量 > 当前工作目录的 .env > 代码默认值
 | `BALE_OPENAI_MODEL` | 默认 `gpt-4o-mini` | 模型名 |
 | `BALE_CONTEXT_WINDOW` | 正整数，默认 `128000` | 上下文窗口裁剪上限；必须大于 0 |
 | `BALE_TRACE_PATH` | 路径，默认空 | 默认 JSONL Trace 文件；为空时不写 Trace |
+| `BALE_TRACE_MAX_BYTES` | 非负整数，默认 `0` | 单个 Trace 文件上限字节数；`0` 表示不轮转 |
+| `BALE_TRACE_BACKUPS` | 正整数，默认 `3` | 轮转保留的备份文件数；备份命名为 `<trace>.1`…`<trace>.N` |
 | `BALE_INPUT_COST_PER_1K` | 非负浮点数，默认空 | 输入 token 每千价格；必须与下一项同时配置 |
 | `BALE_OUTPUT_COST_PER_1K` | 非负浮点数，默认空 | 输出 token 每千价格；必须与上一项同时配置 |
 | `BALE_HTTP_API_KEY` | 字符串，默认空 | 设置后所有 `/v1` 路由要求 Bearer 认证；`/health` 始终公开 |
@@ -116,6 +118,7 @@ Token 数与成本都是确定性估算，不等于 Provider 账单。默认 Fak
 | `BALE_MCP_CONFIG` | 应用 lifespan 内加载并复用 MCP 会话；文件缺失或 JSON/字段非法时拒绝启动 |
 | `GET /v1/runs/{run_id}/report` | 需要 `BALE_HTTP_SESSION_DB`；把该 Run 所属 Session 渲染为 `text/markdown`，仅同一 `principal` 可读；未配置 Session 返回 400，未知 Run 返回 404 |
 | `BALE_TRACE_PATH` | HTTP 执行同样写入默认 Trace；SSE 还会把事件推送到响应流 |
+| `BALE_TRACE_MAX_BYTES` / `BALE_TRACE_BACKUPS` | CLI 与 HTTP 共用同一轮转策略：写入前若超过上限则轮转，保留指定数量的 `.N` 备份 |
 | `BALE_SANDBOX_BACKEND` | HTTP 执行同样使用该沙箱；`docker` 需要服务进程能访问 Docker daemon |
 
 启动示例：

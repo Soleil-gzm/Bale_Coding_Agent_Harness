@@ -101,7 +101,7 @@ flowchart LR
 | `agent/context.py` | `TokenBudget`、`ContextBuilder`：稳定系统前缀、记忆与检索片段注入、预算与裁剪 | 只接收已格式化片段，不主动检索 |
 | `agent/session.py` | `SessionStore`：SQLite 中的 Session、Turn、消息、已执行调用与记忆；写前意图、写后收敛 | 单机本地持久化，不提供多进程协调 |
 | `agent/memory.py` | `after_turn` fast curator：`Task/Outcome` 有界摘要 | 仅 completed 且 best-effort |
-| `agent/trace.py` | `TraceEvent`、`TraceExporter` 协议、`JsonlTraceExporter` 与 `NullTraceExporter`：追加写、序号递增、脱敏、失败不阻断 | 本地 JSONL，无轮转、采样或远程导出 |
+| `agent/trace.py` | `TraceEvent`、`TraceExporter` 协议、`JsonlTraceExporter` 与 `NullTraceExporter`：追加写、序号递增、脱敏、失败不阻断、可选按大小轮转 | 本地 JSONL，无采样或远程导出 |
 | `agent/cost.py` | `CostRates` 与 `estimate_cost`：按每千 token 费率估算成本 | 不内置默认价格，结果不是 Provider 账单 |
 | `agent/report.py` | `build_report`：Session、已执行调用、记忆与 Trace 汇总为 Markdown | 只读投影，不调用模型、不改 Session |
 | `agent/loop.py` | ReAct 循环、终止/取消/迭代与 token 及 wall-clock 预算、上下文重建、检索注入、Session 持久化、恢复、Trace 埋点、耗时与成本与 Diff 聚合 | 无远程 Trace 导出 |
