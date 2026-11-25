@@ -15,7 +15,7 @@ from bale_harness.agent.checkpoint import ShadowGit, ShadowGitError
 from bale_harness.agent.cost import CostRates
 from bale_harness.agent.loop import AgentLoop, RunResult, build_default_loop
 from bale_harness.agent.messages import ToolCall, ToolSpec
-from bale_harness.agent.report import build_report
+from bale_harness.agent.report import build_report, markdown_to_html
 from bale_harness.agent.sandbox import Sandbox, create_sandbox
 from bale_harness.agent.security import WorkspaceError, WorkspaceGuard
 from bale_harness.agent.session import SessionStore, TurnRecord
@@ -534,14 +534,22 @@ def report_command(
         Path | None, typer.Option(help="JSONL trace file to summarize")
     ] = None,
     output: Annotated[
-        Path | None, typer.Option(help="Write the Markdown report to this file")
+        Path | None, typer.Option(help="Write the report to this file")
     ] = None,
+    report_format: Annotated[
+        str,
+        typer.Option("--format", help="Report format: 'markdown' or 'html'"),
+    ] = "markdown",
 ) -> None:
-    """Render a Markdown report for a persisted session."""
+    """Render a Markdown or HTML report for a persisted session."""
     try:
         parsed_session_id = UUID(session_id)
     except ValueError as error:
         raise typer.BadParameter(f"invalid session id: {session_id}") from error
+    if report_format not in {"markdown", "html"}:
+        raise typer.BadParameter(
+            f"unsupported format {report_format!r}; use 'markdown' or 'html'"
+        )
     if trace is not None and not trace.exists():
         raise typer.BadParameter(f"trace file not found: {trace}")
 
@@ -555,11 +563,12 @@ def report_command(
     if markdown is None:
         raise typer.BadParameter(f"no turns for session {parsed_session_id}")
 
+    rendered = markdown if report_format == "markdown" else markdown_to_html(markdown)
     if output is None:
-        typer.echo(markdown)
+        typer.echo(rendered)
         return
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(markdown, encoding="utf-8")
+    output.write_text(rendered, encoding="utf-8")
     typer.echo(f"wrote {output}")
 
 
