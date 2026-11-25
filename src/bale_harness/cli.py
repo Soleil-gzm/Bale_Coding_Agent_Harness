@@ -15,6 +15,7 @@ from bale_harness.agent.cost import CostRates
 from bale_harness.agent.loop import AgentLoop, RunResult, build_default_loop
 from bale_harness.agent.messages import ToolCall, ToolSpec
 from bale_harness.agent.report import build_report
+from bale_harness.agent.sandbox import create_sandbox
 from bale_harness.agent.security import WorkspaceError, WorkspaceGuard
 from bale_harness.agent.session import SessionStore, TurnRecord
 from bale_harness.agent.tools.code_search import (
@@ -301,8 +302,13 @@ def run_command(
         typer.Option("--yes", help="Approve every write and command without prompting"),
     ] = False,
     sandbox: Annotated[
-        str, typer.Option(help="Execution sandbox to use (only 'local' for now)")
-    ] = "local",
+        str | None,
+        typer.Option(help="Execution sandbox: 'local' or 'docker'"),
+    ] = None,
+    sandbox_image: Annotated[
+        str | None,
+        typer.Option("--sandbox-image", help="Container image for the docker sandbox"),
+    ] = None,
     shadow_git: Annotated[
         bool,
         typer.Option(
@@ -345,10 +351,6 @@ def run_command(
     ] = None,
 ) -> None:
     """Execute a ReAct run against the workspace."""
-    if sandbox != "local":
-        raise typer.BadParameter(
-            f"unsupported sandbox {sandbox!r}; only 'local' is available"
-        )
     if resume:
         if message is not None:
             raise typer.BadParameter("--resume cannot be combined with --message")
@@ -362,6 +364,21 @@ def run_command(
     parsed_session_id = _parse_session_id(session_id)
 
     settings = Settings()
+    backend = sandbox or settings.sandbox_backend
+    if backend not in {"local", "docker"}:
+        raise typer.BadParameter(
+            f"unsupported sandbox {backend!r}; use 'local' or 'docker'"
+        )
+    exec_sandbox = create_sandbox(
+        backend,
+        workspace,
+        image=sandbox_image or settings.sandbox_image,
+        network=settings.sandbox_network,
+        memory=settings.sandbox_memory,
+        cpus=settings.sandbox_cpus,
+        pids_limit=settings.sandbox_pids_limit,
+        user=settings.sandbox_user,
+    )
     provider = create_provider(settings)
     mcp_servers: list[McpServerConfig] = []
     if mcp_config is not None:
@@ -420,6 +437,7 @@ def run_command(
                 workspace,
                 approval_mode=approval_mode,
                 approver=approver,
+                sandbox=exec_sandbox,
                 checkpoint=checkpoint,
                 session=session,
                 context_window=settings.context_window,
@@ -617,8 +635,13 @@ def chat_command(
         typer.Option("--yes", help="Approve every write and command without prompting"),
     ] = False,
     sandbox: Annotated[
-        str, typer.Option(help="Execution sandbox to use (only 'local' for now)")
-    ] = "local",
+        str | None,
+        typer.Option(help="Execution sandbox: 'local' or 'docker'"),
+    ] = None,
+    sandbox_image: Annotated[
+        str | None,
+        typer.Option("--sandbox-image", help="Container image for the docker sandbox"),
+    ] = None,
     shadow_git: Annotated[
         bool,
         typer.Option(
@@ -650,12 +673,23 @@ def chat_command(
     ] = None,
 ) -> None:
     """Run an interactive multi-turn session; type /exit to quit."""
-    if sandbox != "local":
-        raise typer.BadParameter(
-            f"unsupported sandbox {sandbox!r}; only 'local' is available"
-        )
     parsed_session_id = _parse_session_id(session_id)
     settings = Settings()
+    backend = sandbox or settings.sandbox_backend
+    if backend not in {"local", "docker"}:
+        raise typer.BadParameter(
+            f"unsupported sandbox {backend!r}; use 'local' or 'docker'"
+        )
+    exec_sandbox = create_sandbox(
+        backend,
+        workspace,
+        image=sandbox_image or settings.sandbox_image,
+        network=settings.sandbox_network,
+        memory=settings.sandbox_memory,
+        cpus=settings.sandbox_cpus,
+        pids_limit=settings.sandbox_pids_limit,
+        user=settings.sandbox_user,
+    )
     provider = create_provider(settings)
     mcp_servers: list[McpServerConfig] = []
     if mcp_config is not None:
@@ -692,6 +726,7 @@ def chat_command(
                 workspace,
                 approval_mode=approval_mode,
                 approver=approver,
+                sandbox=exec_sandbox,
                 checkpoint=checkpoint,
                 session=SessionStore(session_db) if session_db is not None else None,
                 context_window=settings.context_window,

@@ -32,6 +32,7 @@ from bale_harness.agent.approval import auto_approve
 from bale_harness.agent.checkpoint import ShadowGit
 from bale_harness.agent.cost import CostRates
 from bale_harness.agent.loop import RunResult, build_default_loop
+from bale_harness.agent.sandbox import create_sandbox
 from bale_harness.agent.tools.mcp import load_mcp_config, mcp_tools
 from bale_harness.agent.tools.registry import Tool
 from bale_harness.agent.trace import (
@@ -175,11 +176,22 @@ async def _execute(
         if settings.retrieval_enabled
         else None
     )
+    sandbox = create_sandbox(
+        settings.sandbox_backend,
+        request.workspace,
+        image=settings.sandbox_image,
+        network=settings.sandbox_network,
+        memory=settings.sandbox_memory,
+        cpus=settings.sandbox_cpus,
+        pids_limit=settings.sandbox_pids_limit,
+        user=settings.sandbox_user,
+    )
     loop = build_default_loop(
         provider,
         request.workspace,
         approval_mode=request.approval_mode,
         approver=auto_approve if request.approve_writes else None,
+        sandbox=sandbox,
         checkpoint=checkpoint,
         context_window=settings.context_window,
         tracer=tracer,
