@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from bale_harness.agent.checkpoint import ShadowGit, ShadowGitError
+from bale_harness.agent.checkpoint import ShadowGit, ShadowGitError, Snapshot
 
 
 def _run(coro):
@@ -134,3 +134,53 @@ def test_reused_git_dir_keeps_original_baseline(tmp_path: Path) -> None:
     assert reused == baseline
     assert "-one" in diff
     assert "+two" in diff
+
+
+def test_list_snapshots_returns_newest_first(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.txt").write_bytes(b"one\n")
+    git_dir = tmp_path / "shadow"
+
+    async def scenario() -> list[Snapshot]:
+        shadow = ShadowGit(workspace, git_dir)
+        await shadow.init()
+        (workspace / "a.txt").write_bytes(b"two\n")
+        await shadow.snapshot("first change")
+        (workspace / "a.txt").write_bytes(b"three\n")
+        await shadow.snapshot("second change")
+        return await ShadowGit(workspace, git_dir).list_snapshots()
+
+    snapshots = _run(scenario())
+
+    assert [item.message for item in snapshots] == [
+        "second change",
+        "first change",
+        "bale: baseline",
+    ]
+    assert all(len(item.commit) == 40 for item in snapshots)
+    assert all(item.created_at for item in snapshots)
+
+
+def test_list_snapshots_without_checkpoint_is_empty(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    shadow = ShadowGit(workspace, tmp_path / "missing-shadow")
+    assert _run(shadow.list_snapshots()) == []
+
+
+def test_remove_deletes_checkpoint_directory(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.txt").write_bytes(b"one\n")
+    git_dir = tmp_path / "shadow"
+
+    async def scenario() -> None:
+        shadow = ShadowGit(workspace, git_dir)
+        await shadow.init()
+        await shadow.remove()
+
+    _run(scenario())
+
+    assert not git_dir.exists()
+    assert (workspace / "a.txt").read_bytes() == b"one\n"

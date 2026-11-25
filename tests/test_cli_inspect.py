@@ -189,3 +189,143 @@ def test_undo_requires_a_checkpoint_directory(tmp_path: Path) -> None:
     )
 
     assert result.exit_code != 0
+
+
+def _prepare_checkpoint(workspace: Path, checkpoint_dir: Path) -> None:
+    async def prepare() -> None:
+        shadow = ShadowGit(workspace, checkpoint_dir)
+        await shadow.init()
+        (workspace / "a.txt").write_bytes(b"two\n")
+        await shadow.snapshot("first change")
+
+    asyncio.run(prepare())
+
+
+def test_checkpoint_list_prints_snapshots(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.txt").write_bytes(b"one\n")
+    checkpoint_dir = tmp_path / "checkpoints" / str(uuid4())
+    _prepare_checkpoint(workspace, checkpoint_dir)
+
+    result = runner.invoke(
+        app,
+        [
+            "checkpoint",
+            "list",
+            "--workspace",
+            str(workspace),
+            "--session-id",
+            str(uuid4()),
+            "--checkpoint-dir",
+            str(checkpoint_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "2 snapshot(s)" in result.output
+    assert "first change" in result.output
+    assert "bale: baseline" in result.output
+
+
+def test_checkpoint_list_json_is_machine_readable(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.txt").write_bytes(b"one\n")
+    checkpoint_dir = tmp_path / "checkpoints" / str(uuid4())
+    _prepare_checkpoint(workspace, checkpoint_dir)
+
+    result = runner.invoke(
+        app,
+        [
+            "checkpoint",
+            "list",
+            "--workspace",
+            str(workspace),
+            "--session-id",
+            str(uuid4()),
+            "--checkpoint-dir",
+            str(checkpoint_dir),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert [item["message"] for item in payload] == ["first change", "bale: baseline"]
+    assert all(len(item["commit"]) == 40 for item in payload)
+    assert all(item["created_at"] for item in payload)
+
+
+def test_checkpoint_list_without_checkpoint(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    result = runner.invoke(
+        app,
+        [
+            "checkpoint",
+            "list",
+            "--workspace",
+            str(workspace),
+            "--session-id",
+            str(uuid4()),
+            "--checkpoint-dir",
+            str(tmp_path / "missing"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "no checkpoints" in result.output
+
+
+def test_checkpoint_clean_removes_snapshots(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.txt").write_bytes(b"one\n")
+    checkpoint_dir = tmp_path / "checkpoints" / str(uuid4())
+    _prepare_checkpoint(workspace, checkpoint_dir)
+
+    result = runner.invoke(
+        app,
+        [
+            "checkpoint",
+            "clean",
+            "--workspace",
+            str(workspace),
+            "--session-id",
+            str(uuid4()),
+            "--checkpoint-dir",
+            str(checkpoint_dir),
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not checkpoint_dir.exists()
+    assert (workspace / "a.txt").read_bytes() == b"two\n"
+
+
+def test_checkpoint_clean_requires_confirmation(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.txt").write_bytes(b"one\n")
+    checkpoint_dir = tmp_path / "checkpoints" / str(uuid4())
+    _prepare_checkpoint(workspace, checkpoint_dir)
+
+    result = runner.invoke(
+        app,
+        [
+            "checkpoint",
+            "clean",
+            "--workspace",
+            str(workspace),
+            "--session-id",
+            str(uuid4()),
+            "--checkpoint-dir",
+            str(checkpoint_dir),
+        ],
+        input="n\n",
+    )
+
+    assert result.exit_code == 1
+    assert checkpoint_dir.exists()
