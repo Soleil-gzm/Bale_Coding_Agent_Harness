@@ -1,5 +1,8 @@
 import asyncio
 import json
+import os
+import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -7,6 +10,8 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from bale_harness.agent.messages import ModelResponse, ToolCall
+from bale_harness.agent.sandbox import DockerSandbox, LocalSandbox, Sandbox
+from bale_harness.agent.security import WorkspaceGuard
 from bale_harness.cli import app
 from bale_harness.eval import (
     Check,
@@ -67,6 +72,23 @@ def _writing_provider(_task: EvalTask) -> FakeProvider:
             ModelResponse(content="done"),
         ]
     )
+
+
+def _shell_provider(command: list[str]) -> FakeProvider:
+    return FakeProvider(
+        [
+            ModelResponse(
+                tool_calls=[
+                    ToolCall(call_id="c1", name="shell", arguments={"command": command})
+                ]
+            ),
+            ModelResponse(content="done"),
+        ]
+    )
+
+
+def _write_output_task() -> EvalTask:
+    return _task(checks=[{"type": "file_contains", "path": "out.txt", "value": "ok"}])
 
 
 def test_load_tasks_accepts_list_and_document(tmp_path: Path) -> None:
@@ -272,3 +294,66 @@ def test_cli_eval_rejects_invalid_task_file(tmp_path: Path) -> None:
     result = runner.invoke(app, ["eval", "--tasks", str(broken)])
 
     assert result.exit_code != 0
+
+
+def test_run_tasks_uses_sandbox_factory(tmp_path: Path) -> None:
+    _fixture(tmp_path)
+    workspaces: list[Path] = []
+
+    def factory(workspace: Path) -> Sandbox:
+        workspaces.append(workspace)
+        return LocalSandbox(WorkspaceGuard(workspace))
+
+    command = [sys.executable, "-c", "open('out.txt','w').write('ok')"]
+    report = asyncio.run(
+        run_tasks(
+            [_write_output_task()],
+            tmp_path,
+            provider_factory=lambda _task: _shell_provider(command),
+            sandbox_factory=factory,
+        )
+    )
+
+    assert report.passed == 1
+    assert len(workspaces) == 1
+    assert workspaces[0].name == "workspace"
+
+
+@pytest.mark.skipif(
+    os.environ.get("BALE_TEST_DOCKER") != "1" or shutil.which("docker") is None,
+    reason="set BALE_TEST_DOCKER=1 and install Docker to run integration tests",
+)
+def test_run_tasks_uses_docker_sandbox(tmp_path: Path) -> None:
+    _fixture(tmp_path)
+    image = os.environ.get("BALE_TEST_DOCKER_IMAGE", "python:3.11-slim")
+    command = ["python", "-c", "open('out.txt','w').write('ok')"]
+
+    report = asyncio.run(
+        run_tasks(
+            [_write_output_task()],
+            tmp_path,
+            provider_factory=lambda _task: _shell_provider(command),
+            sandbox_factory=lambda workspace: DockerSandbox(workspace, image=image),
+        )
+    )
+
+    assert report.passed == 1
+
+
+def test_cli_eval_rejects_docker_without_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("BALE_PROVIDER", "fake")
+    monkeypatch.setattr("bale_harness.cli.shutil.which", lambda _name: None)
+    _fixture(tmp_path)
+    tasks_file = _write_tasks(
+        tmp_path,
+        [{"id": "t1", "fixture": "fixtures/greeting", "message": "do it"}],
+    )
+
+    result = runner.invoke(
+        app, ["eval", "--tasks", str(tasks_file), "--sandbox", "docker"]
+    )
+
+    assert result.exit_code != 0
+    assert "docker executable not found" in result.output
