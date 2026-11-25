@@ -12,6 +12,7 @@ Bale Coding Agent Harness 是一个本地优先的 Coding Agent 运行时与工�
 | 接入真实模型（DeepSeek/Ollama） | [快速启动 §3、§4.1](quickstart.md) | [配置参考](configuration.md) |
 | 调整环境变量与运行参数 | [配置参考](configuration.md) | [快速启动 §3](quickstart.md) |
 | 接入 HTTP / SSE | [快速启动 §5](quickstart.md) | [安全模型 · HTTP](security.md#http-入口) |
+| 用 Docker 部署 HTTP 服务 | [Docker 部署](deployment.md) | [配置参考](configuration.md) |
 | 接入 MCP 工具 | [快速启动 §4.11、§6–8](quickstart.md) | [架构 §3.3–3.5](architecture.md) |
 | 理解运行时设计 | [架构设计](architecture.md) | [安全模型](security.md) |
 | 排查失败 | [问题排查](troubleshooting.md) | [快速启动 §10](quickstart.md) |
@@ -24,6 +25,7 @@ Bale Coding Agent Harness 是一个本地优先的 Coding Agent 运行时与工�
 | [README](../README.md) | 能力概览、功能边界、项目结构、常用命令 | 所有人 |
 | [quickstart.md](quickstart.md) | 安装、配置、CLI/HTTP/MCP 的可复制命令与预期输出 | 首次使用者、接入方 |
 | [configuration.md](configuration.md) | 配置优先级、环境变量总表、Provider/HTTP/MCP/检索开关与校验失败 | 部署者、接入方 |
+| [deployment.md](deployment.md) | 镜像构建、Compose 运行、卷、认证、MCP 挂载与容器加固 | 部署者、运维 |
 | [architecture.md](architecture.md) | 当前实现分层、模块职责、核心契约、数据流、测试与演进约束 | 贡献者、评审者 |
 | [troubleshooting.md](troubleshooting.md) | 按现象组织的安装/运行/HTTP/MCP/检索/评测排错 | 使用者、运维 |
 | [security.md](security.md) | 信任模型、工作区/审批/执行/MCP/HTTP 边界、密钥与提示注入 | 安全评审、部署者 |
@@ -41,6 +43,7 @@ Bale Coding Agent Harness 是一个本地优先的 Coding Agent 运行时与工�
 
 - 环境变量总表与优先级：[configuration.md](configuration.md)、[quickstart.md §3](quickstart.md)
 - HTTP 路由与认证：[quickstart.md §5](quickstart.md)
+- 容器构建与运行：[Dockerfile](../Dockerfile)、[compose.yaml](../compose.yaml)、[deployment.md](deployment.md)
 - MCP 配置示例：[examples/mcp/servers.json](../examples/mcp/servers.json)
 - 评测任务示例：[examples/eval/tasks.json](../examples/eval/tasks.json)
 - 开发与提交检查：[README · 开发与贡献](../README.md#开发与贡献)

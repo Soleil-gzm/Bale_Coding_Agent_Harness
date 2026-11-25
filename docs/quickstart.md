@@ -425,6 +425,8 @@ curl -X POST http://127.0.0.1:8000/v1/runs/inspect-1/cancel
 
 取消是协作式的，在下一个迭代边界生效；未知或已结束的 `run_id` 返回 404，运行中复用相同 `run_id` 返回 409。设置 `BALE_MCP_CONFIG` 可让 HTTP 应用启动时挂载 MCP 工具；配置损坏时应用启动失败。
 
+需要容器化运行时，见[Docker 部署指南](deployment.md)。
+
 以 SSE 流式观察同一 Turn：
 
 ```bash
@@ -617,6 +619,7 @@ python -m compileall examples
 
 - 按目标选择阅读路径：[文档索引](README.md)。
 - 调整环境变量、Provider 或 HTTP/MCP 开关：[配置参考](configuration.md)。
+- 用 Docker 构建并运行 HTTP 服务：[Docker 部署](deployment.md)。
 - 了解当前实现与目标模块的边界：[架构设计](architecture.md)。
 - 部署或评审前确认信任边界：[安全模型](security.md)。
 - 遇到失败先查：[问题排查](troubleshooting.md)。
