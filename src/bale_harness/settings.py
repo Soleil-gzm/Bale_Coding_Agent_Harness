@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     context_window: int = Field(default=128_000, gt=0)
     trace_path: str | None = None
+    trace_max_bytes: int = Field(default=0, ge=0)
+    trace_backups: int = Field(default=3, ge=1)
     input_cost_per_1k: float | None = Field(default=None, ge=0)
     output_cost_per_1k: float | None = Field(default=None, ge=0)
     http_api_key: SecretStr | None = None

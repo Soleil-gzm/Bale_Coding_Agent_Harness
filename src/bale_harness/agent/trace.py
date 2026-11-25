@@ -86,10 +86,20 @@ class JsonlTraceExporter:
 
     The file is opened in append mode so a resumed turn can extend the same
     trace. Events are serialized with a lock to preserve ``seq`` ordering.
+    When ``max_bytes`` is positive, the file rotates once the next event would
+    exceed it, keeping at most ``backups`` numbered files next to it.
     """
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        max_bytes: int = 0,
+        backups: int = 3,
+    ) -> None:
         self.path = Path(path)
+        self._max_bytes = max(0, max_bytes)
+        self._backups = max(1, backups)
         self._seq = 0
         self._lock = asyncio.Lock()
         self._turn_id: UUID | None = None
@@ -136,8 +146,29 @@ class JsonlTraceExporter:
 
     def _append(self, line: str) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self._should_rotate(len(line.encode("utf-8"))):
+            self._rotate()
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(line)
+
+    def _should_rotate(self, incoming: int) -> bool:
+        if self._max_bytes <= 0 or not self.path.exists():
+            return False
+        current = self.path.stat().st_size
+        return current > 0 and current + incoming > self._max_bytes
+
+    def _rotate(self) -> None:
+        oldest = self._backup_path(self._backups)
+        if oldest.exists():
+            oldest.unlink()
+        for index in range(self._backups - 1, 0, -1):
+            source = self._backup_path(index)
+            if source.exists():
+                source.replace(self._backup_path(index + 1))
+        self.path.replace(self._backup_path(1))
+
+    def _backup_path(self, index: int) -> Path:
+        return self.path.with_name(f"{self.path.name}.{index}")
 
 
 class QueueTraceExporter:

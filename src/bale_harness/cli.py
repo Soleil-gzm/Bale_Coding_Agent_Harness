@@ -455,7 +455,15 @@ def run_command(
     approver: Decider = auto_approve if yes else _console_decider
     session = SessionStore(session_db) if session_db is not None else None
     trace_path = trace or settings.trace_path
-    tracer = JsonlTraceExporter(trace_path) if trace_path else None
+    tracer = (
+        JsonlTraceExporter(
+            trace_path,
+            max_bytes=settings.trace_max_bytes,
+            backups=settings.trace_backups,
+        )
+        if trace_path
+        else None
+    )
     retriever = create_retriever(settings, workspace)
     search_embedder = create_embedder(settings)
 

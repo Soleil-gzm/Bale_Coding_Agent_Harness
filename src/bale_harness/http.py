@@ -301,7 +301,11 @@ async def _execute(
     settings = context.settings
     checkpoint = ShadowGit(request.workspace) if request.shadow_git else None
     if tracer is None and settings.trace_path:
-        tracer = JsonlTraceExporter(settings.trace_path)
+        tracer = JsonlTraceExporter(
+            settings.trace_path,
+            max_bytes=settings.trace_max_bytes,
+            backups=settings.trace_backups,
+        )
     retriever = create_retriever(settings, request.workspace)
     search_embedder = create_embedder(settings)
     sandbox = create_sandbox(
@@ -365,7 +369,12 @@ def _stream_events(
     tracer: TraceExporter = queue
     if context.settings.trace_path:
         tracer = _TeeTraceExporter(
-            queue, JsonlTraceExporter(context.settings.trace_path)
+            queue,
+            JsonlTraceExporter(
+                context.settings.trace_path,
+                max_bytes=context.settings.trace_max_bytes,
+                backups=context.settings.trace_backups,
+            ),
         )
 
     async def body() -> AsyncIterator[str]:
