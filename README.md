@@ -2,7 +2,7 @@
 
 Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目标是将模型交互、工具治理、上下文管理、隔离执行、状态恢复和执行证据组织为可扩展的薄内核。
 
-**当前仓库处于早期建设阶段。** 已落地 B0 工程基础、B1 只读 ReAct 运行时、B2a 写入运行时、B3 上下文/会话运行时、B4 追踪/成本运行时、B5 运行报告、B6 本地闭环增强、B7 HTTP 执行/SSE、B8 检索/评测和 B9 MCP 工具接入：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider 与 OpenAI 兼容 Provider、只创建 Turn 的 CLI/HTTP 入口，带审批、ShadowGit 快照和本地 Sandbox 的 `bale run`，Token 预算、wall-clock 时间预算、历史裁剪、SQLite Session 与取消恢复，JSONL Trace 与可选成本估算，基于 Session/Trace 的 Markdown 报告，持久化 Checkpoint 与 `bale undo`，`bale chat` 多轮交互，`bale session`/`bale trace` 检查命令，`move_file`/`delete_file`/`apply_patch` 写入工具，执行 Turn 的 `POST /v1/runs` 与 SSE 流式 `POST /v1/runs/stream`，以及 BM25 代码检索（`search_code`、`bale search`，可选向量混合与增量快照）、固定任务评测（`bale eval`）和 stdio MCP 工具适配（`bale run --mcp-config`、`bale chat --mcp-config`、HTTP `BALE_MCP_CONFIG`）。HTTP 入口另提供 `/health`、可选 Bearer 认证和按 `run_id` 的协作式取消；Python 文件按顶层定义切块，Agent Loop 会按用户消息自动注入检索片段。Docker 执行沙箱（每次工具调用独立容器）已落地，可用 `--sandbox docker` 或 `BALE_SANDBOX_BACKEND=docker` 启用；HTTP 审批、限流、SQLite Session 与审计也已落地。HTTP 服务本身已支持 Docker 部署。
+**当前仓库处于早期建设阶段。** 已落地 B0 工程基础、B1 只读 ReAct 运行时、B2a 写入运行时、B3 上下文/会话运行时、B4 追踪/成本运行时、B5 运行报告、B6 本地闭环增强、B7 HTTP 执行/SSE、B8 检索/评测和 B9 MCP 工具接入：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider 与 OpenAI 兼容 Provider、只创建 Turn 的 CLI/HTTP 入口，带审批、ShadowGit 快照和本地 Sandbox 的 `bale run`，Token 预算、wall-clock 时间预算、历史裁剪、SQLite Session 与取消恢复，JSONL Trace 与可选成本估算，基于 Session/Trace 的 Markdown 报告，持久化 Checkpoint 与 `bale undo`，`bale chat` 多轮交互，`bale session`/`bale trace` 检查命令，`move_file`/`delete_file`/`apply_patch` 写入工具，执行 Turn 的 `POST /v1/runs` 与 SSE 流式 `POST /v1/runs/stream`，以及 BM25 代码检索（`search_code`、`bale search`，可选向量混合与增量快照）、固定任务评测（`bale eval`）和 stdio MCP 工具适配（`bale run --mcp-config`、`bale chat --mcp-config`、HTTP `BALE_MCP_CONFIG`）。HTTP 入口另提供 `/health`、可选 Bearer 认证和按 `run_id` 的协作式取消；Python 文件按顶层定义切块，Agent Loop 会按用户消息自动注入检索片段。Docker 执行沙箱（每次工具调用独立容器）已落地，可用 `--sandbox docker` 或 `BALE_SANDBOX_BACKEND=docker` 启用；HTTP 审批、限流、SQLite Session、Markdown 报告端点与审计也已落地。HTTP 服务本身已支持 Docker 部署。
 
 ## 文档
 
@@ -59,6 +59,7 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - `GET /health` 始终公开；设置 `BALE_HTTP_API_KEY` 或 `BALE_HTTP_API_KEYS` 后所有 `/v1` 路由要求 `Authorization: Bearer`，认证结果写入 `X-Bale-Principal`。
 - 两个执行接口都返回 `X-Run-Id`；请求可自带 `run_id`，并用 `POST /v1/runs/{run_id}/cancel` 在下一个迭代边界协作取消，未知或已结束的 `run_id` 返回 404。
 - `BALE_HTTP_SESSION_DB` 启用 SQLite Session：响应返回 `X-Session-Id`，请求可传 `session_id` 复用；同一会话的并发 Run 返回 409。
+- `GET /v1/runs/{run_id}/report` 返回该 Run 所属 Session 的 Markdown 报告（`text/markdown`），仅同一 `principal` 可读；需要启用 Session，未知 `run_id` 返回 404。
 - `BALE_HTTP_APPROVALS=true` 时写/执行调用挂起，`GET/POST /v1/runs/{run_id}/approvals[/{approval_id}]` 用于查询与决定；超时、结束或取消按拒绝处理。
 - `BALE_HTTP_RATE_LIMIT_PER_MINUTE` 按调用方限流（429 + `Retry-After`）；`BALE_HTTP_AUDIT_LOG` 追加运行与审批的 JSONL 审计。审批与限流状态在进程内，多副本不共享。
 
@@ -112,10 +113,10 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - Session 持久化基于本地 SQLite 文件，不提供多进程协调或远程存储；HTTP 侧只支持单进程内复用。
 - Checkpoint 目录已可持久化并支持 `bale undo`，但没有快照浏览/清理命令，也依赖本机 `git`。
 - Trace 为本地追加 JSONL，无轮转、采样或远程导出；`estimated_cost` 只是按配置费率的估算，不代表 Provider 账单。
-- 运行报告是只读 Markdown 投影，只提供 CLI 入口，不包含 HTML/PDF 导出或 HTTP 报告接口。
+- 运行报告是只读 Markdown 投影，提供 CLI 与 HTTP（`GET /v1/runs/{run_id}/report`）入口，不调用模型、不执行工具，也不包含 HTML/PDF 导出。
 - 检索默认是无第三方依赖的 BM25 词法排序（Python 按顶层定义切块，其余按行窗口），可选叠加 OpenAI 兼容 embedding 的向量召回与按文件签名的增量索引；向量端点不可用时会退回 BM25。评测只执行 JSON 固定任务与文件级断言，不包含 Docker 隔离、自动生成任务或模型评分。
 - MCP 只支持 stdio transport；`bale run` 每次重建会话，`bale chat` 与 HTTP 入口在各自生命周期内复用一个会话，不包含 SSE/HTTP transport、工具缓存、工具级审批界面或跨进程会话复用。`read_only` 是调用方声明，不代表服务器已被隔离。
-- HTTP 接口提供 Bearer 认证（多 Key + `read`/`write` scope）、内存限流、SQLite Session、HTTP 审批、JSONL 审计、`run_id` 指定与协作式取消；没有 TLS、多副本共享状态或按工具/路径的 ACL，`approve_writes=true` 只应由可信调用方使用。
+- HTTP 接口提供 Bearer 认证（多 Key + `read`/`write` scope）、内存限流、SQLite Session、HTTP 审批、JSONL 审计、Markdown 报告端点、`run_id` 指定与协作式取消；没有 TLS、多副本共享状态或按工具/路径的 ACL，`approve_writes=true` 只应由可信调用方使用。
 - 自动检索按用户消息在每次 Turn 注入有限片段，不感知对话历史，也不保证召回完整；检索异常时静默跳过，不阻断 Turn。
 - `bale chat` 的跨 Turn 连续性依赖 Session 记忆摘要，不携带完整历史，也不会自动压缩超长对话。
 - 审批在 CLI 中提供交互确认与 `--yes`，在 HTTP 中通过 `BALE_HTTP_APPROVALS` 与审批接口提供；两者都不判断命令内容是否安全。

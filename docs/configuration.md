@@ -112,8 +112,9 @@ Token 数与成本都是确定性估算，不等于 Provider 账单。默认 Fak
 | `BALE_HTTP_RATE_LIMIT_PER_MINUTE` | 按 `principal`（无认证时按客户端 IP）使用内存令牌桶；`/health` 不受限 |
 | `BALE_HTTP_APPROVALS` | `true` 时写/执行调用挂起并广播 `approval_requested` Trace 事件，等待 HTTP 决定；超时拒绝 |
 | `BALE_HTTP_APPROVAL_TIMEOUT_SECONDS` | 审批等待上限；到期未决定按拒绝处理，写入不会发生 |
-| `BALE_HTTP_AUDIT_LOG` | 追加 JSONL：`run_started`、`run_finished`、`run_cancelled`、`run_failed`、`approval_requested`、`approval_decided`、`approval_result`；不记录提示词与工具参数 |
+| `BALE_HTTP_AUDIT_LOG` | 追加 JSONL：`run_started`、`run_finished`、`run_cancelled`、`run_failed`、`approval_requested`、`approval_decided`、`approval_result`、`report_rendered`；不记录提示词与工具参数 |
 | `BALE_MCP_CONFIG` | 应用 lifespan 内加载并复用 MCP 会话；文件缺失或 JSON/字段非法时拒绝启动 |
+| `GET /v1/runs/{run_id}/report` | 需要 `BALE_HTTP_SESSION_DB`；把该 Run 所属 Session 渲染为 `text/markdown`，仅同一 `principal` 可读；未配置 Session 返回 400，未知 Run 返回 404 |
 | `BALE_TRACE_PATH` | HTTP 执行同样写入默认 Trace；SSE 还会把事件推送到响应流 |
 | `BALE_SANDBOX_BACKEND` | HTTP 执行同样使用该沙箱；`docker` 需要服务进程能访问 Docker daemon |
 
@@ -159,6 +160,15 @@ curl -X POST http://127.0.0.1:8000/v1/runs \
 ```
 
 不传 `session_id` 时服务端生成一个并在 `X-Session-Id` 与 `RunResult.session_id` 返回。未配置 `BALE_HTTP_SESSION_DB` 时携带 `session_id` 返回 400。
+
+运行报告（需要 Session 持久化）：
+
+```bash
+curl http://127.0.0.1:8000/v1/runs/fix-1/report \
+  -H "Authorization: Bearer $BALE_HTTP_API_KEY"
+```
+
+响应为 `text/markdown`，同时带 `X-Run-Id` 与 `X-Session-Id`。报告只读取 Session 与 Trace，不调用模型、不执行工具。未知或超出最近 200 次运行记录的 `run_id` 返回 404；调用方 `principal` 与运行创建者不一致时返回 403。
 
 限流与认证边界：
 

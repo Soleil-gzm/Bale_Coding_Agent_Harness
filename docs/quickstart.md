@@ -461,6 +461,15 @@ curl -X POST http://127.0.0.1:8000/v1/runs/inspect-1/cancel
 
 取消是协作式的，在下一个迭代边界生效；未知或已结束的 `run_id` 返回 404，运行中复用相同 `run_id` 返回 409。设置 `BALE_MCP_CONFIG` 可让 HTTP 应用启动时挂载 MCP 工具；配置损坏时应用启动失败。
 
+运行结束后可按 `run_id` 获取 Markdown 报告（需要 `BALE_HTTP_SESSION_DB`）：
+
+```bash
+curl http://127.0.0.1:8000/v1/runs/inspect-1/report \
+  -H "Authorization: Bearer $BALE_HTTP_API_KEY"
+```
+
+响应为 `text/markdown`，带 `X-Run-Id` 与 `X-Session-Id`；只包含该 Run 所属 Session，且仅同一 `principal` 可读。未启用 Session 返回 400，未知 `run_id` 返回 404。
+
 设置 `BALE_HTTP_SESSION_DB` 后，Run 会写入 SQLite，并返回 `X-Session-Id`；把该值作为下一次请求的 `session_id` 即可复用会话。同一 `session_id` 的并发 Run 返回 409，未配置数据库时携带 `session_id` 返回 400：
 
 ```bash

@@ -86,6 +86,7 @@ CLI 的 `--yes` 使用 `auto_approve`，HTTP 的 `approve_writes=true` 同理。
 - `BALE_HTTP_SESSION_DB` 把 Run 记录写入本地 SQLite；同一 `session_id` 的并发 Run 返回 409。Session 记录包含用户消息、工具状态与答案，应按源码同等级别保护该文件。
 - `BALE_HTTP_APPROVALS=true` 时，写/执行调用会挂起等待 `POST /v1/runs/{run_id}/approvals/{approval_id}` 的决定；超时（`BALE_HTTP_APPROVAL_TIMEOUT_SECONDS`）或 Run 结束/取消一律按拒绝处理。审批参数来自模型输出，可能包含提示注入内容，批准前必须核对工具名与参数，而不是只看模型摘要。
 - `GET /v1/runs/{run_id}/approvals` 暴露 `arguments`；只应允许可信调用方访问，且不要在日志中留存完整参数。
+- `GET /v1/runs/{run_id}/report` 包含会话消息、工具结果与最终答案，仅允许创建该 Run 的同一 `principal` 读取；报告中可能含不可信仓库文本，导出或分享前应人工检查。
 - `BALE_HTTP_AUDIT_LOG` 追加 `principal`、`run_id`、`session_id`、状态与审批结果；不记录提示词、答案和工具参数，但可能包含工作区路径。
 - `workspace` 由调用方指定，服务端不会限制到你预期的目录；**只应在本机或可信内网监听**，公网部署需自行加 TLS、认证网关与限流。
 - 默认 `approve_writes=false` 且未开启审批时，写/执行工具直接拒绝；把它设为 `true` 等于信任所有调用方。
