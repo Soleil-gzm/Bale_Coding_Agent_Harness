@@ -204,14 +204,21 @@ bale run --workspace . --message "hello" --mcp-config servers.json --yes
 
 ### `bale search` 没有命中
 
-1. 换用代码中真实出现的标识符或注释词；纯自然语言描述可能没有词法重叠。
+1. 换用代码中真实出现的标识符或注释词；未启用 embedding 时纯自然语言描述可能没有词法重叠，混合检索可缓解但不保证召回。
 2. `--path` 是否限定到了错误子目录。
 3. 目标文件是否被跳过：隐藏目录、`__pycache__`/`node_modules`/`dist`/`build` 等、二进制、非文本后缀、超过 256 KiB 的文件，以及索引上限 2000 个文件。
 4. 确认工作区路径正确：`--workspace` 指向的是包含代码的根目录。
 
 ### 首次检索很慢
 
-索引是惰性构建的，第一次调用会扫描工作区。用 `--path` 缩小范围，或减少同时索引的文件数；Bale 不提供增量索引或持久化索引。
+索引是惰性构建的，第一次调用会扫描工作区并可能调用 embedding。用 `--path` 缩小范围，或设置 `BALE_RETRIEVAL_INDEX_PATH` 持久化快照：后续运行按文件签名复用未变化的片段与向量，只处理新增、修改和删除的文件。
+
+### 向量检索没有生效
+
+1. `bale search --json` 中 `vector_search` 为 `false`，说明没有可用的向量：检查 `BALE_EMBEDDING_MODEL` 是否设置，`BALE_EMBEDDING_BASE_URL`/`BALE_EMBEDDING_API_KEY`（或回退的 `BALE_OPENAI_*`）是否可用，以及 `BALE_RETRIEVAL_HYBRID` 是否被关闭。
+2. embedding 端点失败时索引会静默退回 BM25，不阻断搜索；查看服务端日志确认请求是否到达。
+3. `BALE_RETRIEVAL_ALPHA=1` 表示完全使用 BM25；想更依赖向量请调低该值。
+4. 修改文件后，同一进程内的检索器不会自动重建索引；重启进程或重新调用 `bale search` 才会读取新快照。
 
 ### 自动检索让上下文变大或结果跑偏
 

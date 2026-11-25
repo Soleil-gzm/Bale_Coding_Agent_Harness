@@ -36,8 +36,14 @@ CLI 参数 > 进程环境变量 > 当前工作目录的 .env > 代码默认值
 | `BALE_HTTP_APPROVAL_TIMEOUT_SECONDS` | 正整数，默认 `120` | 单个审批的等待上限；超时按拒绝处理 |
 | `BALE_HTTP_AUDIT_LOG` | 路径，默认空 | 追加 JSONL 审计记录：运行开始/结束、取消、审批请求与决定 |
 | `BALE_MCP_CONFIG` | 路径，默认空 | HTTP 应用启动时加载的 MCP 服务器 JSON |
-| `BALE_RETRIEVAL_ENABLED` | 布尔，默认 `true` | 是否在每个 Turn 自动注入 BM25 检索片段 |
+| `BALE_RETRIEVAL_ENABLED` | 布尔，默认 `true` | 是否在每个 Turn 自动注入检索片段 |
 | `BALE_RETRIEVAL_TOP_K` | 整数，默认 `5`，范围 1–20 | 自动检索注入的片段上限 |
+| `BALE_RETRIEVAL_HYBRID` | 布尔，默认 `true` | 配置 embedding 模型时启用向量召回；未配置模型时始终为纯 BM25 |
+| `BALE_RETRIEVAL_ALPHA` | 浮点数，默认 `0.5`，范围 0–1 | 混合排序中 BM25 的权重，其余权重分配给向量相似度 |
+| `BALE_RETRIEVAL_INDEX_PATH` | 路径，默认空 | 索引 JSON 快照路径；设置后片段与向量可跨进程复用并增量更新 |
+| `BALE_EMBEDDING_MODEL` | 字符串，默认空 | OpenAI 兼容 embedding 模型名；为空则不做向量检索 |
+| `BALE_EMBEDDING_BASE_URL` | 字符串，默认空 | embeddings 端点；为空时复用 `BALE_OPENAI_BASE_URL` |
+| `BALE_EMBEDDING_API_KEY` | 字符串，默认空 | embedding 请求的 Bearer Key；为空时复用 `BALE_OPENAI_API_KEY`，本地回环可省略 |
 | `BALE_SANDBOX_BACKEND` | `local` 或 `docker`，默认 `local` | 命令执行沙箱；`docker` 为每条命令启动独立容器 |
 | `BALE_SANDBOX_IMAGE` | 字符串，默认 `python:3.11-slim` | Docker 沙箱镜像；必须包含工作区需要的运行时与测试依赖 |
 | `BALE_SANDBOX_NETWORK` | 布尔，默认 `false` | 是否给沙箱容器启用网络；默认 `none` |
@@ -211,16 +217,28 @@ bale run --workspace "$PWD" --message "写一条 MCP 笔记" \
 
 ## 8. 检索配置
 
-自动检索在每个 Turn 开始时按用户消息检索工作区，把有限片段作为独立的 untrusted 段落写入系统前缀：
+自动检索在每个 Turn 开始时按用户消息检索工作区，把有限片段作为独立的 untrusted 段落写入系统前缀。默认是纯 BM25；配置 embedding 模型后变为向量召回与 BM25 的混合排序：
 
 ```bash
-export BALE_RETRIEVAL_ENABLED=false   # 关闭自动注入
-export BALE_RETRIEVAL_TOP_K=3         # 仅保留前 3 条
+export BALE_RETRIEVAL_ENABLED=false      # 关闭自动注入
+export BALE_RETRIEVAL_TOP_K=3            # 仅保留前 3 条
+export BALE_RETRIEVAL_HYBRID=true        # 有 embedding 模型时启用向量召回
+export BALE_RETRIEVAL_ALPHA=0.5          # BM25 权重；0 为纯向量，1 为纯 BM25
+export BALE_RETRIEVAL_INDEX_PATH=.bale/repo-index.json
+
+# OpenAI 兼容 embeddings；本地端点（如 Ollama）可省略 Key。
+export BALE_EMBEDDING_MODEL=text-embedding-3-small
+export BALE_EMBEDDING_BASE_URL=https://api.openai.com/v1
+export BALE_EMBEDDING_API_KEY=sk-...
 ```
 
-- `BALE_RETRIEVAL_TOP_K` 超出 1–20 会在配置校验阶段失败。
-- 自动检索不感知对话历史，也不保证召回完整；检索异常会静默跳过，不阻断 Turn。
-- 索引按工作区惰性构建，不写磁盘；关闭自动注入后仍可使用 `search_code` 或 `bale search`。
+- 未设置 `BALE_EMBEDDING_MODEL` 时只使用 BM25。`BALE_EMBEDDING_BASE_URL` 为空会复用 `BALE_OPENAI_BASE_URL`，`BALE_EMBEDDING_API_KEY` 为空会复用 `BALE_OPENAI_API_KEY`；远程端点没有可用 Key 时不启用向量，而不是启动失败。
+- embedding 请求失败、返回空向量或维度不一致时，索引清空向量并退回 BM25，搜索与 Turn 继续执行。`search_code` 的 `vector_search` 元数据和 `bale search --json` 的 `vector_search` 字段表示实际是否启用向量。
+- `BALE_RETRIEVAL_TOP_K` 超出 1–20、`BALE_RETRIEVAL_ALPHA` 超出 0–1 会在配置校验阶段失败。
+- 索引按文件 `mtime_ns:size` 签名增量重建：未变化文件复用片段与向量，新增或修改文件重新切块并只补齐缺失向量，删除文件被移除。设置 `BALE_RETRIEVAL_INDEX_PATH` 后快照以 JSON 原子写入磁盘；快照损坏或版本不符时整体忽略并重建。
+- 索引在每个检索器或工具实例内只构建一次，同一次 Turn 中不会自动感知文件变化；跨进程复用或减少重复 embedding 时请配置快照路径。
+- 自动检索不感知对话历史，也不保证召回完整；检索异常会静默跳过，不阻断 Turn。关闭自动注入后仍可使用 `search_code` 或 `bale search`。
+- 向量召回会把片段文本发送给配置的 embedding 端点；不要将不可外发的代码索引到远程服务。
 
 ## 9. CLI 运行参数与配置的关系
 
@@ -236,7 +254,8 @@ export BALE_RETRIEVAL_TOP_K=3         # 仅保留前 3 条
 
 ## 10. 校验失败与安全处理
 
-- **启动失败**：`provider=openai` 且远程端点缺少有效 Key；`BALE_RETRIEVAL_TOP_K` 越界；`BALE_MCP_CONFIG` 损坏。修复配置后再启动，不要通过关闭校验绕过。
+- **启动失败**：`provider=openai` 且远程端点缺少有效 Key；`BALE_RETRIEVAL_TOP_K` 或 `BALE_RETRIEVAL_ALPHA` 越界；`BALE_MCP_CONFIG` 损坏。修复配置后再启动，不要通过关闭校验绕过。
+- **检索静默退回 BM25**：`bale search --json` 的 `vector_search=false` 表示未配置 embedding 或调用失败；检查 `BALE_EMBEDDING_MODEL`、端点与 Key。embedding 故障不会阻断搜索或 Turn。
 - **HTTP 401**：检查 `Authorization: Bearer` 是否与 `BALE_HTTP_API_KEY` 完全一致；`/health` 不需要认证。
 - **HTTP 422**：请求字段类型或范围不合法，例如 `token_budget <= 0`、未知字段、空白 `message`。
 - **密钥处理**：Settings 使用 `SecretStr`，日志与 `repr` 不输出明文；不要把 `.env` 内容粘贴到 Issue 或终端分享中。

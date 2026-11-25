@@ -304,19 +304,32 @@ bale undo \
 
 ### 4.9 代码检索
 
-B8 增加只读工具 `search_code` 与 CLI `bale search`，二者共享 `repo_index.Bm25Index`：
+只读工具 `search_code` 与 CLI `bale search` 共用 `repo_index.HybridIndex`：默认是 BM25，配置 embedding 后自动加入向量召回并融合排序：
 
 ```bash
 bale search --workspace "$PWD" --query "tool registry" --limit 5
 bale search --workspace "$PWD" --query "session resume" --json
 ```
 
-- 每次 CLI 调用都会重新扫描工作区；`search_code` 在单个工具实例内缓存索引。
+- 每次 CLI 调用都会重新扫描工作区；设置 `BALE_RETRIEVAL_INDEX_PATH` 时会读取并写回快照，未变化文件直接复用片段与向量。`search_code` 在单个工具实例内缓存索引。
 - Python 文件按顶层函数/类切块（装饰器归入所属定义），模块头、定义间语句与尾部代码各自成块；语法错误或非 Python 文件回退到行窗口。
 - 按 40 行窗口（8 行重叠）回退切块，标识符按 snake_case/camelCase 拆分后小写化，使用 BM25 排序。
 - 默认跳过隐藏目录、`__pycache__`/`node_modules`/`dist`/`build` 等目录、二进制文件、非文本后缀和超过 256 KiB 的文件；最多索引 2000 个文件。
-- 分数只表示词法相关性；`--limit` 取值为 1–50，`--path` 可限定子目录且不能逃逸工作区。
+- `--limit` 取值为 1–50，`--path` 可限定子目录且不能逃逸工作区。混合检索时 `score` 是归一化融合分，`--json` 还会给出 `vector_search` 表示向量是否实际启用。
 - 默认开启自动检索：`bale run`/`bale chat`/HTTP 在 Turn 开始按用户消息检索，把 `path:start-end` 片段作为独立 untrusted 段落写入系统前缀；同 Turn 内前缀稳定，检索失败时跳过。环境变量 `BALE_RETRIEVAL_ENABLED=false` 可关闭，`BALE_RETRIEVAL_TOP_K` 控制条数。
+
+启用混合检索（OpenAI 兼容 embeddings 端点）：
+
+```bash
+export BALE_EMBEDDING_MODEL=text-embedding-3-small
+export BALE_EMBEDDING_BASE_URL=https://api.openai.com/v1
+export BALE_EMBEDDING_API_KEY=sk-...
+export BALE_RETRIEVAL_ALPHA=0.5
+export BALE_RETRIEVAL_INDEX_PATH=.bale/repo-index.json
+bale search --workspace "$PWD" --query "how are sessions resumed" --json
+```
+
+也可复用已有的 `BALE_OPENAI_*` 配置（含本地 Ollama）并只额外设置模型名。embedding 失败时索引自动退回 BM25，`vector_search` 为 `false`；`BALE_EMBEDDING_API_KEY` 与 `BALE_EMBEDDING_BASE_URL` 分别回退到 `BALE_OPENAI_API_KEY` 与 `BALE_OPENAI_BASE_URL`。
 
 ### 4.10 固定任务评测
 

@@ -4,7 +4,7 @@
 
 本文同时记录两类内容：
 
-- **当前实现**：B0 工程骨架、Turn/ToolResult 契约、Settings、ModelProvider/FakeProvider、共享 Turn 构造入口；B1 只读 ReAct 运行时（AgentLoop、ToolRegistry、只读内置工具、Workspace 路径防护与 `bale run` 入口）；B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、LocalSandbox、审批策略、ShadowGit 快照与调用幂等）；B3 上下文与会话运行时（Token 预算、历史裁剪、稳定系统前缀、SQLite Session、`after_turn` 记忆、取消与恢复）；B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）；B5 运行报告（Session/Trace 到 Markdown）；B6 本地闭环增强（持久化 Checkpoint 与 `bale undo`、`bale session`/`bale trace` 检查命令、`bale chat` 多轮交互、`move_file`/`delete_file`/`apply_patch`、OpenAI 兼容 Provider、`py.typed`）；B7 HTTP 执行与 SSE（`POST /v1/runs`、`POST /v1/runs/stream`），并补齐 `/health`、可选 Bearer 认证、`run_id` 指定与协作式取消；B8 检索与评测（AST/行窗口 BM25、`bale search`、`bale eval`）；B9 stdio MCP 工具适配，并在 `bale chat` 与 HTTP lifespan 内复用会话，`Bm25Retriever` 在每次 Turn 自动注入检索证据；以及可独立运行的 FastMCP 文件写入示例；B10 HTTP 生产化（多 Key principal/scope、内存限流、SQLite Session 复用、HTTP 审批、JSONL 审计）与 Docker 执行沙箱。
+- **当前实现**：B0 工程骨架、Turn/ToolResult 契约、Settings、ModelProvider/FakeProvider、共享 Turn 构造入口；B1 只读 ReAct 运行时（AgentLoop、ToolRegistry、只读内置工具、Workspace 路径防护与 `bale run` 入口）；B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、LocalSandbox、审批策略、ShadowGit 快照与调用幂等）；B3 上下文与会话运行时（Token 预算、历史裁剪、稳定系统前缀、SQLite Session、`after_turn` 记忆、取消与恢复）；B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）；B5 运行报告（Session/Trace 到 Markdown）；B6 本地闭环增强（持久化 Checkpoint 与 `bale undo`、`bale session`/`bale trace` 检查命令、`bale chat` 多轮交互、`move_file`/`delete_file`/`apply_patch`、OpenAI 兼容 Provider、`py.typed`）；B7 HTTP 执行与 SSE（`POST /v1/runs`、`POST /v1/runs/stream`），并补齐 `/health`、可选 Bearer 认证、`run_id` 指定与协作式取消；B8 检索与评测（AST/行窗口 BM25、OpenAI 兼容向量召回与混合排序、基于文件签名的增量索引与 JSON 快照、`bale search`、`bale eval`）；B9 stdio MCP 工具适配，并在 `bale chat` 与 HTTP lifespan 内复用会话，`Bm25Retriever` 在每次 Turn 自动注入检索证据；以及可独立运行的 FastMCP 文件写入示例；B10 HTTP 生产化（多 Key principal/scope、内存限流、SQLite Session 复用、HTTP 审批、JSONL 审计）与 Docker 执行沙箱。
 - **目标架构**：Coding Agent Harness 的后续设计方向，用于约束模块边界和扩展方式。
 
 除特别注明外，带有“规划”“目标”或“后续”标识的模块均未在当前仓库实现。文档中的目标接口是逻辑契约，不代表已有 Python 类或稳定 API。
@@ -63,7 +63,7 @@ CLI 和 HTTP 对相同输入生成相同的非 ID 字段；`turn_id` 和 `sessio
 
 ### 3.2 B1 只读、B2a 写入、B3 上下文/会话与 B4 追踪/成本运行时
 
-B1 实现了最小 ReAct 闭环：模型请求工具调用 → 注册表治理执行 → 结果回注上下文 → 无工具调用时结束。B2a 在同一注册表上加入写入与执行工具：调用先经审批，`shell`/`run_tests` 交由 `LocalSandbox` 执行，每次迭代结束由 `ShadowGit` 在独立 git-dir 中快照，最终把 Diff 写入结果。B3 在循环外补充上下文与状态：每次模型调用前由 `ContextBuilder` 用稳定系统前缀、Session 记忆和裁剪后的历史重建提示；可选 `SessionStore` 以 SQLite 追加保存消息、Turn 状态、已执行调用和 `after_turn` 记忆，取消或中断后可按 Turn 恢复且不重复副作用。B4 在循环内埋点：`JsonlTraceExporter` 追加记录 `turn_started`、`model_call`、`tool_call`、`checkpoint` 与 `turn_finished`，`CostRates` 在配置费率后给出估算成本；追踪是 best-effort，写入失败不会改变 Turn 结果。B5 在循环外做只读投影：`build_report` 汇总 Session 中的 Turn、已执行调用、记忆与 Trace，生成 Markdown 报告，不调用模型、不写入 Session。B6 补全本地闭环：`--session-db`/`--checkpoint-dir` 让 ShadowGit git-dir 跨进程保留，复用已有 `HEAD` 作为基线，`bale undo` 按基线或指定快照恢复工作区；`bale session list/show` 与 `bale trace` 只读检查状态，`bale chat` 在单 Session 上循环 Turn；`providers_openai.OpenAICompatibleProvider` 以标准库 `urllib` 接入 OpenAI/DeepSeek/Ollama。B7 补齐 HTTP 执行：`POST /v1/runs` 同步执行并返回 `RunResult`，`POST /v1/runs/stream` 复用 Trace 事件，通过内存队列转成 SSE，最终发送 `result`；HTTP 路径不接 Session，默认无审批器（写入被拒绝），仅在 `approve_writes=true` 时使用 `auto_approve`。HTTP 生产化补充：`GET /health` 公开，配置 `BALE_HTTP_API_KEY` 后所有 `/v1` 路由要求 `Authorization: Bearer`；调用方可自带 `run_id`，运行中的 Turn 通过 `POST /v1/runs/{run_id}/cancel` 在下一个迭代边界协作取消。B8 让 `repo_index.chunk_source` 优先按 Python 顶层定义切块，`Bm25Retriever` 在每次 Turn 开始按用户消息检索并格式化片段，经 `ContextBuilder` 作为独立的 untrusted 段落写入稳定系统前缀；检索异常时跳过上下文，不改变 Turn 结果。B9 让 `bale chat` 在整个 REPL 期间持有同一个 MCP 会话，HTTP 应用则在 lifespan 中启动并在关闭时回收 MCP 子进程。
+B1 实现了最小 ReAct 闭环：模型请求工具调用 → 注册表治理执行 → 结果回注上下文 → 无工具调用时结束。B2a 在同一注册表上加入写入与执行工具：调用先经审批，`shell`/`run_tests` 交由 `LocalSandbox` 执行，每次迭代结束由 `ShadowGit` 在独立 git-dir 中快照，最终把 Diff 写入结果。B3 在循环外补充上下文与状态：每次模型调用前由 `ContextBuilder` 用稳定系统前缀、Session 记忆和裁剪后的历史重建提示；可选 `SessionStore` 以 SQLite 追加保存消息、Turn 状态、已执行调用和 `after_turn` 记忆，取消或中断后可按 Turn 恢复且不重复副作用。B4 在循环内埋点：`JsonlTraceExporter` 追加记录 `turn_started`、`model_call`、`tool_call`、`checkpoint` 与 `turn_finished`，`CostRates` 在配置费率后给出估算成本；追踪是 best-effort，写入失败不会改变 Turn 结果。B5 在循环外做只读投影：`build_report` 汇总 Session 中的 Turn、已执行调用、记忆与 Trace，生成 Markdown 报告，不调用模型、不写入 Session。B6 补全本地闭环：`--session-db`/`--checkpoint-dir` 让 ShadowGit git-dir 跨进程保留，复用已有 `HEAD` 作为基线，`bale undo` 按基线或指定快照恢复工作区；`bale session list/show` 与 `bale trace` 只读检查状态，`bale chat` 在单 Session 上循环 Turn；`providers_openai.OpenAICompatibleProvider` 以标准库 `urllib` 接入 OpenAI/DeepSeek/Ollama。B7 补齐 HTTP 执行：`POST /v1/runs` 同步执行并返回 `RunResult`，`POST /v1/runs/stream` 复用 Trace 事件，通过内存队列转成 SSE，最终发送 `result`；HTTP 路径不接 Session，默认无审批器（写入被拒绝），仅在 `approve_writes=true` 时使用 `auto_approve`。HTTP 生产化补充：`GET /health` 公开，配置 `BALE_HTTP_API_KEY` 后所有 `/v1` 路由要求 `Authorization: Bearer`；调用方可自带 `run_id`，运行中的 Turn 通过 `POST /v1/runs/{run_id}/cancel` 在下一个迭代边界协作取消。B8 让 `repo_index.chunk_source` 优先按 Python 顶层定义切块，`Bm25Retriever` 在每次 Turn 开始按用户消息检索并格式化片段，经 `ContextBuilder` 作为独立的 untrusted 段落写入稳定系统前缀；检索异常时跳过上下文，不改变 Turn 结果。配置 `BALE_EMBEDDING_MODEL` 后，`HybridIndex` 额外通过 OpenAI 兼容 `/embeddings` 端点向量化片段，按 `BALE_RETRIEVAL_ALPHA` 融合 BM25 与余弦相似度；embedding 不可用或返回异常时自动退回纯 BM25。索引可按文件 `mtime_ns:size` 签名增量重建，并在设置 `BALE_RETRIEVAL_INDEX_PATH` 时写入 JSON 快照供后续进程复用。B9 让 `bale chat` 在整个 REPL 期间持有同一个 MCP 会话，HTTP 应用则在 lifespan 中启动并在关闭时回收 MCP 子进程。
 
 ```mermaid
 flowchart LR
@@ -105,8 +105,11 @@ flowchart LR
 | `agent/cost.py` | `CostRates` 与 `estimate_cost`：按每千 token 费率估算成本 | 不内置默认价格，结果不是 Provider 账单 |
 | `agent/report.py` | `build_report`：Session、已执行调用、记忆与 Trace 汇总为 Markdown | 只读投影，不调用模型、不改 Session |
 | `agent/loop.py` | ReAct 循环、终止/取消/迭代与 token 预算、上下文重建、检索注入、Session 持久化、恢复、Trace 埋点、耗时与成本与 Diff 聚合 | 无远程 Trace 导出 |
-| `repo_index/index.py` | `chunk_source`：Python 顶层定义优先、行窗口回退；`Bm25Index` 与 `SearchHit` | 进程内索引，无持久化、增量更新或向量召回 |
-| `repo_index/retriever.py` | `Bm25Retriever`：懒加载索引，按 `top_k` 与字符上限生成 `path:start-end` 片段 | 同步实现，由 Loop 在线程中调用 |
+| `repo_index/index.py` | `chunk_source`：Python 顶层定义优先、行窗口回退；`Bm25Index`、`scores` 与 `SearchHit` | 纯词法基线，不读取磁盘快照 |
+| `repo_index/hybrid.py` | `HybridIndex`：BM25 与向量分数归一化融合、按文件签名增量重建、可选 JSON 快照、embedding 失败降级 | 同步实现，索引构建发生在调用线程 |
+| `repo_index/embedding.py` | `Embedder` 协议、`OpenAIEmbedder` 与 `create_embedder`：标准库 `urllib` 调用 OpenAI 兼容 `/embeddings` | 不引入第三方向量库；远程端点缺少 Key 时返回 `None` |
+| `repo_index/store.py` | JSON 快照读写：版本校验、文件签名、片段与可选向量、原子替换 | 快照损坏时整体忽略并重建 |
+| `repo_index/retriever.py` | `Bm25Retriever`：懒加载 `HybridIndex`，按 `top_k` 与字符上限生成 `path:start-end` 片段 | 同步实现，由 Loop 在线程中调用 |
 | `cli.py` `run` / `report` / `chat` / `session` / `trace` / `undo` | `run` 执行 Turn，支持 Session/Resume/Trace；`report` 输出 Markdown；`chat` 循环 Turn；`session`/`trace` 只读检查；`undo` 从 Checkpoint 恢复 | 退出码：`completed` 为 0，否则为 1 |
 
 `ModelProvider.complete` 已演进为接收消息列表与工具定义、返回结构化 `ModelResponse`；`FakeProvider` 支持脚本化响应队列，使循环测试完全离线且确定；`OpenAICompatibleProvider` 面向任意 OpenAI 兼容端点，测试通过注入 transport 完成，不访问网络。
@@ -238,7 +241,7 @@ flowchart TB
 | `tracing/` | Span、错误、Token、延迟和成本 | 无 Runtime 反向依赖 |
 | `eval/` | 固定任务、确定性验证和报告 | CLI、Workspace、Verifier |
 
-这些路径用于说明职责边界。B1 已实现 `agent/loop.py`、`agent/context.py`（最小前缀）、`agent/tools/registry.py`、`agent/tools/builtin.py`（只读工具）和 `agent/security.py`；B2a 已实现 `agent/approval.py`、`agent/sandbox.py`（LocalSandbox）、`agent/checkpoint.py`（ShadowGit）、`agent/tools/write.py`、`agent/tools/exec.py` 与 `agent/tools/git.py`；B3 已实现 `agent/history.py`、完整的 `agent/context.py`、`agent/session.py` 与 `agent/memory.py`；B4 已实现 `agent/trace.py` 与 `agent/cost.py`；B5 已实现 `agent/report.py`；B6 已实现 `providers_openai.py`、Checkpoint 持久化/`undo`、`session`/`trace`/`chat` CLI 与扩展写入工具；B7 已实现 `http.py` 的执行、SSE、健康检查、Bearer 认证与 `run_id` 取消；B8 已实现 `repo_index/`（AST/行窗口 BM25、`Bm25Retriever` 自动注入与 `search_code`/`bale search`）和 `eval/`（固定任务、确定性文件断言与 `bale eval`）；B9 已实现 `agent/tools/mcp.py`（stdio 连接、分页 `list_tools`、工具命名空间与 `call_tool` 适配，`bale run`/`bale chat`/HTTP 接入）；B10 已实现 `http_support.py`（多 Key principal/scope、内存限流、SQLite Session 门禁、HTTP 审批 Broker、JSONL 审计）与 `DockerSandbox`；其余模块（如 Knowledge Retriever、多副本共享状态）仍为规划，不能当作已有能力。后续实现时应以实际代码和测试为准更新本文。
+这些路径用于说明职责边界。B1 已实现 `agent/loop.py`、`agent/context.py`（最小前缀）、`agent/tools/registry.py`、`agent/tools/builtin.py`（只读工具）和 `agent/security.py`；B2a 已实现 `agent/approval.py`、`agent/sandbox.py`（LocalSandbox）、`agent/checkpoint.py`（ShadowGit）、`agent/tools/write.py`、`agent/tools/exec.py` 与 `agent/tools/git.py`；B3 已实现 `agent/history.py`、完整的 `agent/context.py`、`agent/session.py` 与 `agent/memory.py`；B4 已实现 `agent/trace.py` 与 `agent/cost.py`；B5 已实现 `agent/report.py`；B6 已实现 `providers_openai.py`、Checkpoint 持久化/`undo`、`session`/`trace`/`chat` CLI 与扩展写入工具；B7 已实现 `http.py` 的执行、SSE、健康检查、Bearer 认证与 `run_id` 取消；B8 已实现 `repo_index/`（AST/行窗口 BM25、`HybridIndex` 向量混合与增量快照、`Bm25Retriever` 自动注入与 `search_code`/`bale search`）和 `eval/`（固定任务、确定性文件断言与 `bale eval`）；B9 已实现 `agent/tools/mcp.py`（stdio 连接、分页 `list_tools`、工具命名空间与 `call_tool` 适配，`bale run`/`bale chat`/HTTP 接入）；B10 已实现 `http_support.py`（多 Key principal/scope、内存限流、SQLite Session 门禁、HTTP 审批 Broker、JSONL 审计）与 `DockerSandbox`；其余模块（如 Knowledge Retriever、多副本共享状态）仍为规划，不能当作已有能力。后续实现时应以实际代码和测试为准更新本文。
 
 ## 6. 核心逻辑契约
 
@@ -271,7 +274,7 @@ B1 已实现 `ToolSpec`（名称、描述、parameters、副作用类型、并�
 
 检索结果统一携带内容、相似度或排序分数、来源和元数据。代码检索还应提供路径、起止行号和 revision；知识库检索可提供 chunk/document 标识。分数不能直接解释为答案置信度。
 
-B8 的实际实现：`repo_index.SearchHit` 携带 `path`、`start_line`、`end_line`、`score` 和 `snippet`。Python 文件按顶层函数/类切块（含装饰器），模块头、定义间语句和尾部代码各自成块；语法错误或非 Python 文件回退到 40 行窗口（8 行重叠）。索引使用标准库 BM25（`k1=1.5`、`b=0.75`）对标识符分词结果排序；跳过隐藏目录、常见构建/缓存目录、二进制、非文本后缀和超过 256 KiB 的文件，单次最多索引 2000 个文件。索引只存在于工具或 `Bm25Retriever` 实例内，不持久化，也不返回 revision。自动注入时，`Bm25Retriever` 按 `BALE_RETRIEVAL_TOP_K`（默认 5）取前若干片段，并以字符上限截断后交给 `ContextBuilder`。
+B8 的实际实现：`repo_index.SearchHit` 携带 `path`、`start_line`、`end_line`、`score` 和 `snippet`，混合索引还会填充 `lexical_score` 与 `vector_score`。Python 文件按顶层函数/类切块（含装饰器），模块头、定义间语句和尾部代码各自成块；语法错误或非 Python 文件回退到 40 行窗口（8 行重叠）。索引使用标准库 BM25（`k1=1.5`、`b=0.75`）对标识符分词结果排序；跳过隐藏目录、常见构建/缓存目录、二进制、非文本后缀和超过 256 KiB 的文件，单次最多索引 2000 个文件和 10000 个片段。`HybridIndex` 在配置 embedding 时计算片段向量与查询向量，将 BM25 分数与余弦相似度分别按最大值归一化后以 `BALE_RETRIEVAL_ALPHA` 线性融合；embedding 失败、维度不一致或返回异常时清空向量并退回 BM25，搜索不会因此失败。增量重建以文件 `mtime_ns:size` 签名判断复用，修改或新增文件重新切块并只对缺少向量的片段调用 embedding，删除文件从索引移除；设置 `BALE_RETRIEVAL_INDEX_PATH` 时快照以 JSON 原子写入磁盘，下次进程启动直接复用片段与向量。自动注入时，`Bm25Retriever` 按 `BALE_RETRIEVAL_TOP_K`（默认 5）取前若干片段，并以字符上限截断后交给 `ContextBuilder`。
 
 ## 7. 目标核心流程
 
@@ -319,7 +322,8 @@ B3 的实际实现：
 - `available_history` 使用上述公式并夹到零；固定前缀与当前 Turn 仍超窗时返回失败，不发送残缺请求。
 - `HistoryTrimmer` 先压缩超长 tool 输出（默认 4000 字符），再从最旧 Turn 整组丢弃，最新 Turn 始终保留。
 - `ContextBuilder` 的系统前缀在 Turn 内稳定，`after_turn` 记忆只在下个 Turn 注入。
-- 自动检索在 Turn 开始时执行一次：`Bm25Retriever` 按用户消息取片段，`ContextBuilder` 将其渲染为独立的 untrusted 段落；同一 Turn 的后续模型调用复用同一前缀。检索只依赖当前消息，不感知历史；字符预算与 `top_k` 由 `BALE_RETRIEVAL_*` 控制。
+- 自动检索在 Turn 开始时执行一次：`Bm25Retriever` 按用户消息取片段，`ContextBuilder` 将其渲染为独立的 untrusted 段落；同一 Turn 的后续模型调用复用同一前缀。检索只依赖当前消息，不感知历史；字符预算、`top_k`、混合权重与索引快照由 `BALE_RETRIEVAL_*` 与 `BALE_EMBEDDING_*` 控制。
+- 索引在单个检索器或工具实例内只构建一次，同一 Turn 不自动感知文件变化；需要跨进程复用或增量刷新时，设置 `BALE_RETRIEVAL_INDEX_PATH` 并在下一次进程或重建索引时读取快照。
 - 恢复按 Session 中最新 `running`/`cancelled` Turn 进行，复用原始 user 消息；执行前写入 `pending` 意图，恢复时对缺失结果合成 `outcome_unknown` 而不重放。
 
 ## 8. 技术栈选型说明
@@ -336,7 +340,7 @@ B3 的实际实现：
 | MCP `stdio` | 本地进程集成简单、无需开放端口 | 客户端必须管理进程生命周期 |
 | pytest、Ruff、pip-tools | 离线测试、静态检查和可复现安装 | 本地通过不等于远程 CI 已运行 |
 | `sqlite3`（标准库） | B3 Session、消息、已执行调用与记忆持久化 | 单机文件数据库，不提供分布式协调 |
-| BM25（标准库实现） | B8 代码检索、检索注入与 `search_code` | 无倒排持久化、增量更新或向量召回 |
+| BM25 + 可选 embedding（标准库实现） | B8 代码检索、混合排序、增量注入与 `search_code` | 向量来自 OpenAI 兼容端点；无第三方向量库，embedding 不可用时退化为纯 BM25 |
 | Docker（可选） | `DockerSandbox` 为每条命令启动独立容器，提供网络、文件系统与资源隔离 | 需要宿主 Docker daemon 与预构建镜像；共享宿主内核 |
 | 本地文本文件 | MCP 示例无需外部服务 | 不提供并发、权限或持久化保证 |
 
@@ -397,7 +401,7 @@ B3 的实际实现：
 
 ## 11. 测试与验证设计
 
-当前 pytest 覆盖契约、配置、FakeProvider、CLI/HTTP 同构、输入校验，以及 B1 的消息契约、路径防护、工具注册器、只读内置工具、ReAct 循环和 CLI run 端到端，B2a 的审批策略、Sandbox 防护、ShadowGit 快照、写入/编辑与执行工具、幂等与「写代码→跑测试→finish」闭环，以及 B3 的 token 估算、预算非负、按 Turn 裁剪与消息配对、稳定前缀、SQLite Session 往返与事务回滚、`after_turn` 记忆、取消落库、Case C 恢复不重复写入和 CLI `--resume`，B4 的 JSONL 事件顺序、追加写入、脱敏与失败不阻断、成本估算和 `--trace`，B5 的 Session 列表顺序、Trace 回读、Markdown 报告内容与 `bale report`，B6 的 Session 汇总、Checkpoint 跨进程基线复用、`bale session`/`bale trace`/`bale chat`/`bale undo`、扩展写入工具、OpenAI 兼容 Provider 的请求映射/解析/重试/脱敏与本地端点免 Key 配置，以及 B8 的标识符分词、BM25 排序、隐藏/二进制文件过滤、`search_code`/`bale search`、任务文件校验、fixture 复制隔离、文件断言和 Markdown/JSON 评测报告，B9 的 MCP 配置校验、工具名与 `inputSchema` 映射、必填参数校验、写/只读治理、`mcp_error`/`mcp_tool_error` 归一化、stdio 往返和 `bale run --mcp-config`；MCP 示例可通过客户端执行初始化、`list_tools` 和 `call_tool`，并检查输出文件内容。HTTP 生产化覆盖 `/health` 公开性、Bearer 认证的 401/200、`X-Run-Id`、未知 `run_id` 取消 404、SSE 运行中取消与结果清理；MCP 接入覆盖 `bale chat` 跨 Turn 复用会话、HTTP lifespan 挂载与损坏配置启动失败；检索覆盖 AST 切块/装饰器/语法回退、`top_k` 与字符上限、`Bm25Retriever` 排序，以及 Loop 将片段注入系统前缀且检索失败不阻断 Turn。基础检查命令为：
+当前 pytest 覆盖契约、配置、FakeProvider、CLI/HTTP 同构、输入校验，以及 B1 的消息契约、路径防护、工具注册器、只读内置工具、ReAct 循环和 CLI run 端到端，B2a 的审批策略、Sandbox 防护、ShadowGit 快照、写入/编辑与执行工具、幂等与「写代码→跑测试→finish」闭环，以及 B3 的 token 估算、预算非负、按 Turn 裁剪与消息配对、稳定前缀、SQLite Session 往返与事务回滚、`after_turn` 记忆、取消落库、Case C 恢复不重复写入和 CLI `--resume`，B4 的 JSONL 事件顺序、追加写入、脱敏与失败不阻断、成本估算和 `--trace`，B5 的 Session 列表顺序、Trace 回读、Markdown 报告内容与 `bale report`，B6 的 Session 汇总、Checkpoint 跨进程基线复用、`bale session`/`bale trace`/`bale chat`/`bale undo`、扩展写入工具、OpenAI 兼容 Provider 的请求映射/解析/重试/脱敏与本地端点免 Key 配置，以及 B8 的标识符分词、BM25 排序、隐藏/二进制文件过滤、`search_code`/`bale search`、任务文件校验、fixture 复制隔离、文件断言和 Markdown/JSON 评测报告，B9 的 MCP 配置校验、工具名与 `inputSchema` 映射、必填参数校验、写/只读治理、`mcp_error`/`mcp_tool_error` 归一化、stdio 往返和 `bale run --mcp-config`；MCP 示例可通过客户端执行初始化、`list_tools` 和 `call_tool`，并检查输出文件内容。HTTP 生产化覆盖 `/health` 公开性、Bearer 认证的 401/200、`X-Run-Id`、未知 `run_id` 取消 404、SSE 运行中取消与结果清理；MCP 接入覆盖 `bale chat` 跨 Turn 复用会话、HTTP lifespan 挂载与损坏配置启动失败；检索覆盖 AST 切块/装饰器/语法回退、`top_k` 与字符上限、`Bm25Retriever` 排序、向量独有命中、embedding 失败退回 BM25、增量复用/新增/修改/删除、JSON 快照跨实例复用与损坏快照忽略，以及 Loop 将片段注入系统前缀且检索失败不阻断 Turn。基础检查命令为：
 
 ```bash
 ruff check src tests
