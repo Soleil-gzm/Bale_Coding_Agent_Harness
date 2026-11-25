@@ -1,11 +1,14 @@
 import asyncio
 import json
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from mcp.types import CallToolResult, TextContent
 from mcp.types import Tool as McpToolDefinition
+from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from bale_harness.agent.approval import PolicyApprover, auto_approve
@@ -244,6 +247,131 @@ def test_load_mcp_config_rejects_invalid_documents(tmp_path: Path) -> None:
 
     with pytest.raises(McpConfigError):
         load_mcp_config(tmp_path / "missing.json")
+
+
+def test_mcp_config_requires_transport_specific_fields() -> None:
+    with pytest.raises(ValidationError, match="command is required"):
+        McpServerConfig(name="notes")
+    with pytest.raises(ValidationError, match="url is required"):
+        McpServerConfig(name="remote", transport="sse")
+    with pytest.raises(ValidationError, match="http or https"):
+        McpServerConfig(
+            name="remote", transport="http", url="ftp://mcp.example.com/mcp"
+        )
+    with pytest.raises(ValidationError, match="only valid for http/sse"):
+        McpServerConfig(name="local", command="python", url="https://example.com")
+    with pytest.raises(ValidationError, match="only valid for stdio"):
+        McpServerConfig(
+            name="remote",
+            transport="http",
+            url="https://mcp.example.com/mcp",
+            command="python",
+        )
+
+
+def test_load_mcp_config_accepts_http_server(tmp_path: Path) -> None:
+    config_path = tmp_path / "servers.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "servers": [
+                    {
+                        "name": "remote",
+                        "transport": "http",
+                        "url": "https://mcp.example.com/mcp",
+                        "headers": {"Authorization": "Bearer token"},
+                        "read_only": True,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    servers = load_mcp_config(config_path)
+
+    assert len(servers) == 1
+    assert servers[0].transport == "http"
+    assert servers[0].command is None
+    assert servers[0].url == "https://mcp.example.com/mcp"
+    assert servers[0].headers == {"Authorization": "Bearer token"}
+
+
+class _FakeClientSession:
+    def __init__(self, read_stream: object, write_stream: object) -> None:
+        self.read_stream = read_stream
+        self.write_stream = write_stream
+        self.initialized = False
+
+    async def __aenter__(self) -> "_FakeClientSession":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+    async def initialize(self) -> None:
+        self.initialized = True
+
+    async def list_tools(self, cursor: str | None = None) -> SimpleNamespace:
+        return SimpleNamespace(tools=[_definition()], nextCursor=None)
+
+
+def test_http_transport_uses_streamable_http_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: dict[str, object] = {}
+
+    @asynccontextmanager
+    async def fake_http(url: str, headers: dict[str, str] | None = None):
+        recorded["url"] = url
+        recorded["headers"] = headers
+        yield ("read", "write", lambda: "session-id")
+
+    monkeypatch.setattr("bale_harness.agent.tools.mcp.streamablehttp_client", fake_http)
+    monkeypatch.setattr(
+        "bale_harness.agent.tools.mcp.ClientSession", _FakeClientSession
+    )
+    config = McpServerConfig(
+        name="remote",
+        transport="http",
+        url="https://mcp.example.com/mcp",
+        headers={"X-Key": "secret"},
+    )
+
+    async def scenario() -> list[str]:
+        async with mcp_tools([config]) as tools:
+            return [tool.spec.name for tool in tools]
+
+    assert asyncio.run(scenario()) == ["mcp_remote_write_note"]
+    assert recorded == {
+        "url": "https://mcp.example.com/mcp",
+        "headers": {"X-Key": "secret"},
+    }
+
+
+def test_sse_transport_uses_sse_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorded: dict[str, object] = {}
+
+    @asynccontextmanager
+    async def fake_sse(url: str, headers: dict[str, str] | None = None):
+        recorded["url"] = url
+        recorded["headers"] = headers
+        yield ("read", "write")
+
+    monkeypatch.setattr("bale_harness.agent.tools.mcp.sse_client", fake_sse)
+    monkeypatch.setattr(
+        "bale_harness.agent.tools.mcp.ClientSession", _FakeClientSession
+    )
+    config = McpServerConfig(
+        name="remote", transport="sse", url="https://mcp.example.com/sse"
+    )
+
+    async def scenario() -> list[str]:
+        async with mcp_tools([config]) as tools:
+            return [tool.spec.name for tool in tools]
+
+    assert asyncio.run(scenario()) == ["mcp_remote_write_note"]
+    assert recorded == {"url": "https://mcp.example.com/sse", "headers": None}
 
 
 def test_mcp_tools_without_servers_yields_nothing() -> None:
