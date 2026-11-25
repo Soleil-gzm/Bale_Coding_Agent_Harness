@@ -291,6 +291,24 @@ bale undo \
 - 未传 `--yes` 时会要求交互确认；`--snapshot <commit>` 可恢复到指定快照。
 - 撤销会覆盖工作区当前内容，包括基线之后新建的文件。
 
+浏览与清理持久化快照：
+
+```bash
+bale checkpoint list \
+  --workspace "$PWD" \
+  --session-id 6f1c1f6e-2e0e-4d0e-9d1e-2f7f1a9b8c11 \
+  --session-db "$PWD/.bale/sessions.db"
+bale checkpoint clean \
+  --workspace "$PWD" \
+  --session-id 6f1c1f6e-2e0e-4d0e-9d1e-2f7f1a9b8c11 \
+  --session-db "$PWD/.bale/sessions.db" \
+  --yes
+```
+
+- `list` 按时间倒序输出 commit、时间与快照消息，`--json` 便于脚本处理；目录不存在时输出 `no checkpoints` 并以 0 退出。
+- `clean` 删除整个 Checkpoint 目录（含基线），不修改工作区；不带 `--yes` 时需要确认，拒绝删除会以 1 退出。
+- 两个命令都不需要在运行 Turn 时使用，也不会重新扫描工作区；`--checkpoint-dir` 同样适用。
+
 ### 4.8 写入工具
 
 除 `write_file`、`edit_file` 外，B6 增加了：

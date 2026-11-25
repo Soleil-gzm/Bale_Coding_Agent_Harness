@@ -93,7 +93,7 @@ flowchart LR
 | `agent/tools/builtin.py` | `read_file`、`list_files`、`search_files`，输出有界 | 全部只读且并发安全 |
 | `agent/approval.py` | `PolicyApprover`：按 `auto_read`/`approve_write`/`approve_all` 判定，缺省拒绝 | 只做决策，不负责交互或持久化 |
 | `agent/sandbox.py` | `Sandbox` 端口、`LocalSandbox` 与 `DockerSandbox`：本地 argv 执行，以及每命令一次性容器（无网络、只读根、资源限额、超时清理） | `LocalSandbox` 非安全边界；`DockerSandbox` 依赖宿主 Docker daemon |
-| `agent/checkpoint.py` | `ShadowGit`：独立 git-dir 的基线快照、逐迭代快照、diff 与恢复；可跨进程复用 | 不读写用户 `.git` |
+| `agent/checkpoint.py` | `ShadowGit`：独立 git-dir 的基线快照、逐迭代快照、diff 与恢复；可跨进程复用；`Snapshot` 与 `list_snapshots` 只读列出提交，`remove` 删除整个 Checkpoint 目录 | 不读写用户 `.git`；列出不初始化或提交工作区 |
 | `agent/tools/write.py` | `write_file`、`edit_file`、`move_file`、`delete_file`、`apply_patch`：原子写与精确匹配前置校验 | 写副作用，需审批 |
 | `agent/tools/exec.py` | `shell`、`run_tests`：拒绝 shell 元字符，交由 Sandbox 执行 | 执行副作用，需审批 |
 | `agent/tools/git.py` | `git_diff` 读取 ShadowGit 变更；`finish` 作为完成信号 | 均为只读 |
@@ -110,7 +110,7 @@ flowchart LR
 | `repo_index/embedding.py` | `Embedder` 协议、`OpenAIEmbedder` 与 `create_embedder`：标准库 `urllib` 调用 OpenAI 兼容 `/embeddings` | 不引入第三方向量库；远程端点缺少 Key 时返回 `None` |
 | `repo_index/store.py` | JSON 快照读写：版本校验、文件签名、片段与可选向量、原子替换 | 快照损坏时整体忽略并重建 |
 | `repo_index/retriever.py` | `Bm25Retriever`：懒加载 `HybridIndex`，按 `top_k` 与字符上限生成 `path:start-end` 片段 | 同步实现，由 Loop 在线程中调用 |
-| `cli.py` `run` / `report` / `chat` / `session` / `trace` / `undo` | `run` 执行 Turn，支持 Session/Resume/Trace；`report` 输出 Markdown；`chat` 循环 Turn；`session`/`trace` 只读检查；`undo` 从 Checkpoint 恢复 | 退出码：`completed` 为 0，否则为 1 |
+| `cli.py` `run` / `report` / `chat` / `session` / `trace` / `undo` / `checkpoint` | `run` 执行 Turn，支持 Session/Resume/Trace；`report` 输出 Markdown；`chat` 循环 Turn；`session`/`trace`/`checkpoint list` 只读检查；`undo` 从 Checkpoint 恢复；`checkpoint clean` 删除快照目录 | 退出码：`completed` 为 0，否则为 1 |
 
 `ModelProvider.complete` 已演进为接收消息列表与工具定义、返回结构化 `ModelResponse`；`FakeProvider` 支持脚本化响应队列，使循环测试完全离线且确定；`OpenAICompatibleProvider` 面向任意 OpenAI 兼容端点，测试通过注入 transport 完成，不访问网络。
 

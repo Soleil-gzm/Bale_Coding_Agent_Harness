@@ -81,6 +81,7 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - 传入 `--session-db` 或显式 `--checkpoint-dir` 时，ShadowGit 的 git-dir 会保留在 `<session_db 父目录>/checkpoints/<session_id>`（若该路径位于 workspace 内则回退到系统临时目录）；不再随进程退出删除。
 - 复用已有 git-dir 时以原 `HEAD` 作为基线，因此恢复后的 Diff 仍覆盖恢复之前的全部改动。
 - `bale undo` 从持久化 Checkpoint 恢复工作区；默认回到基线，可用 `--snapshot` 指定某个快照，必须 `--yes` 或交互确认。
+- `bale checkpoint list` 以时间倒序列出快照（commit、时间、消息），支持 `--json`；`bale checkpoint clean` 删除整个 Checkpoint 目录，必须 `--yes` 或交互确认。两者复用 `--session-db` / `--checkpoint-dir` 定位，且只读列出不会创建工作区快照。
 
 ### 会话、追踪检查与多轮交互
 
@@ -111,7 +112,7 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - OpenAI 兼容 Provider 只实现非流式 Chat Completions（`temperature=0`），不支持流式输出、多模型路由或结构化输出参数。
 - 默认 `LocalSandbox` 仅适用于受控开发场景；`DockerSandbox` 提供容器级隔离，但仍共享宿主内核与 Docker daemon。
 - Session 持久化基于本地 SQLite 文件，不提供多进程协调或远程存储；HTTP 侧只支持单进程内复用。
-- Checkpoint 目录已可持久化并支持 `bale undo`，但没有快照浏览/清理命令，也依赖本机 `git`。
+- Checkpoint 目录已可持久化，支持 `bale undo` 恢复以及 `bale checkpoint list/clean` 浏览与清理，但依赖本机 `git`。
 - Trace 为本地追加 JSONL，无轮转、采样或远程导出；`estimated_cost` 只是按配置费率的估算，不代表 Provider 账单。
 - 运行报告是只读 Markdown 投影，提供 CLI 与 HTTP（`GET /v1/runs/{run_id}/report`）入口，不调用模型、不执行工具，也不包含 HTML/PDF 导出。
 - 检索默认是无第三方依赖的 BM25 词法排序（Python 按顶层定义切块，其余按行窗口），可选叠加 OpenAI 兼容 embedding 的向量召回与按文件签名的增量索引；向量端点不可用时会退回 BM25。评测只执行 JSON 固定任务与文件级断言，不包含 Docker 隔离、自动生成任务或模型评分。
@@ -156,7 +157,7 @@ Bale_Coding_Agent_Harness/
 │   ├── providers_openai.py   # OpenAI 兼容 Provider（DeepSeek/Ollama）
 │   ├── py.typed              # PEP 561 类型标记
 │   ├── turns.py              # TurnRequest 与共享 build_turn()
-│   ├── cli.py                # bale turn/search/eval/run/chat/report/session/trace/undo
+│   ├── cli.py                # bale turn/search/eval/run/chat/report/session/trace/undo/checkpoint
 │   ├── http.py               # /v1/turns、/v1/runs(/stream)、审批、取消、/health
 │   ├── http_support.py       # API Key/principal、限流、审批 Broker、审计
 │   ├── repo_index/           # BM25/向量混合检索、AST 切块、增量快照与注入

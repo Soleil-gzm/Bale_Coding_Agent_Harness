@@ -263,6 +263,8 @@ export BALE_EMBEDDING_API_KEY=sk-...
 | `--shadow-git` / `--no-shadow-git` | 无环境变量 | 默认开启快照 |
 | `--max-iterations`、`--token-budget`、`--time-budget`、`--cost-budget` | 无环境变量 | 单次运行预算；`--time-budget` 单位为秒，必须大于 0 |
 
+`bale undo`、`bale checkpoint list` 与 `bale checkpoint clean` 共用 `--session-db` / `--checkpoint-dir` 定位快照目录：前者派生自 `<session_db 父目录>/checkpoints/<session_id>`，后者显式覆盖；位于 workspace 内的路径会被拒绝或回退到系统临时目录。`list` 只读，`clean` 删除整个目录且需要 `--yes` 或交互确认。
+
 ## 10. 校验失败与安全处理
 
 - **启动失败**：`provider=openai` 且远程端点缺少有效 Key；`BALE_RETRIEVAL_TOP_K` 或 `BALE_RETRIEVAL_ALPHA` 越界；`BALE_MCP_CONFIG` 损坏。修复配置后再启动，不要通过关闭校验绕过。

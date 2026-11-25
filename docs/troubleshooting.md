@@ -90,6 +90,10 @@ bale run --workspace . --message "..." --no-shadow-git
 
 `--checkpoint-dir or --session-db is required`：undo 需要知道快照位置；`no checkpoint at ...`：目录不存在或尚未产生快照。先运行一次带持久化参数的 `bale run`/`bale chat`。
 
+### `bale checkpoint list` / `bale checkpoint clean` 报错
+
+`--checkpoint-dir or --session-db is required`：需要定位快照目录；`no checkpoints at ...`：目录不存在或没有 ShadowGit `HEAD`。`refusing to remove ...: it contains the workspace`：`clean` 拒绝删除包含工作区的目录，请传入具体的 Checkpoint 目录。`clean` 不带 `--yes` 时会询问确认，拒绝后以退出码 1 结束且不删除任何内容。
+
 ### `unsupported sandbox ...; use 'local' or 'docker'`
 
 `--sandbox` 只接受 `local` 或 `docker`。检查拼写，或删除该参数使用 `BALE_SANDBOX_BACKEND` 的默认值。
