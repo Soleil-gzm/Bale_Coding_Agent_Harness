@@ -29,6 +29,12 @@ CLI 参数 > 进程环境变量 > 当前工作目录的 .env > 代码默认值
 | `BALE_INPUT_COST_PER_1K` | 非负浮点数，默认空 | 输入 token 每千价格；必须与下一项同时配置 |
 | `BALE_OUTPUT_COST_PER_1K` | 非负浮点数，默认空 | 输出 token 每千价格；必须与上一项同时配置 |
 | `BALE_HTTP_API_KEY` | 字符串，默认空 | 设置后所有 `/v1` 路由要求 Bearer 认证；`/health` 始终公开 |
+| `BALE_HTTP_API_KEYS` | JSON 对象，默认空 | 多 Key 认证：`{"<token>": {"principal": "alice", "scope": "read"\|"write"}}` |
+| `BALE_HTTP_SESSION_DB` | 路径，默认空 | 设置后 HTTP 运行持久化到 SQLite；请求可用 `session_id` 复用会话 |
+| `BALE_HTTP_RATE_LIMIT_PER_MINUTE` | 非负整数，默认 `0` | 每个调用方每分钟的请求数；`0` 关闭；超限返回 429 与 `Retry-After` |
+| `BALE_HTTP_APPROVALS` | 布尔，默认 `false` | 开启后写/执行调用等待 HTTP 审批，超时拒绝 |
+| `BALE_HTTP_APPROVAL_TIMEOUT_SECONDS` | 正整数，默认 `120` | 单个审批的等待上限；超时按拒绝处理 |
+| `BALE_HTTP_AUDIT_LOG` | 路径，默认空 | 追加 JSONL 审计记录：运行开始/结束、取消、审批请求与决定 |
 | `BALE_MCP_CONFIG` | 路径，默认空 | HTTP 应用启动时加载的 MCP 服务器 JSON |
 | `BALE_RETRIEVAL_ENABLED` | 布尔，默认 `true` | 是否在每个 Turn 自动注入 BM25 检索片段 |
 | `BALE_RETRIEVAL_TOP_K` | 整数，默认 `5`，范围 1–20 | 自动检索注入的片段上限 |
@@ -94,6 +100,12 @@ Token 数与成本都是确定性估算，不等于 Provider 账单。默认 Fak
 | 配置 | 行为 |
 |---|---|
 | `BALE_HTTP_API_KEY` | 设置后 `/v1` 全部要求 `Authorization: Bearer <key>`；缺失或错误返回 401 与 `WWW-Authenticate: Bearer` |
+| `BALE_HTTP_API_KEYS` | 多 Key：每个 Key 映射 `principal` 与 `scope`；`read` 只能运行 `approval_mode=auto_read` 的 Turn，且不能审批 |
+| `BALE_HTTP_SESSION_DB` | 设置后每个 Run 记录到 SQLite；响应头与 `RunResult` 都带 `session_id`；同一会话的并发 Run 返回 409 |
+| `BALE_HTTP_RATE_LIMIT_PER_MINUTE` | 按 `principal`（无认证时按客户端 IP）使用内存令牌桶；`/health` 不受限 |
+| `BALE_HTTP_APPROVALS` | `true` 时写/执行调用挂起并广播 `approval_requested` Trace 事件，等待 HTTP 决定；超时拒绝 |
+| `BALE_HTTP_APPROVAL_TIMEOUT_SECONDS` | 审批等待上限；到期未决定按拒绝处理，写入不会发生 |
+| `BALE_HTTP_AUDIT_LOG` | 追加 JSONL：`run_started`、`run_finished`、`run_cancelled`、`run_failed`、`approval_requested`、`approval_decided`、`approval_result`；不记录提示词与工具参数 |
 | `BALE_MCP_CONFIG` | 应用 lifespan 内加载并复用 MCP 会话；文件缺失或 JSON/字段非法时拒绝启动 |
 | `BALE_TRACE_PATH` | HTTP 执行同样写入默认 Trace；SSE 还会把事件推送到响应流 |
 | `BALE_SANDBOX_BACKEND` | HTTP 执行同样使用该沙箱；`docker` 需要服务进程能访问 Docker daemon |
@@ -102,10 +114,51 @@ Token 数与成本都是确定性估算，不等于 Provider 账单。默认 Fak
 
 ```bash
 export BALE_HTTP_API_KEY=local-dev-key
+export BALE_HTTP_SESSION_DB=.bale/sessions.db
+export BALE_HTTP_RATE_LIMIT_PER_MINUTE=60
+export BALE_HTTP_AUDIT_LOG=.bale/audit.jsonl
 uvicorn bale_harness.http:create_app --factory --host 127.0.0.1 --port 8000
 ```
 
-HTTP 当前没有限流、Session 持久化或交互式审批流；`workspace` 由调用方指定，服务应只监听本机或可信内网。写入默认被拒绝，只有可信调用方才应传 `approve_writes=true`。
+审批与审批接口：
+
+```bash
+# 1. 发起需要写入的 Run；approve_writes 保持 false
+curl -X POST http://127.0.0.1:8000/v1/runs \
+  -H "Authorization: Bearer $BALE_HTTP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Fix the failing test", "workspace": "/srv/workspace", "run_id": "fix-1"}'
+
+# 2. 查询挂起的审批（包含工具名与参数）
+curl http://127.0.0.1:8000/v1/runs/fix-1/approvals \
+  -H "Authorization: Bearer $BALE_HTTP_API_KEY"
+
+# 3. 批准或拒绝
+curl -X POST http://127.0.0.1:8000/v1/runs/fix-1/approvals/<approval_id> \
+  -H "Authorization: Bearer $BALE_HTTP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"decision": "approve"}'
+```
+
+`GET /v1/runs/{run_id}/approvals` 返回 `approval_id`、`tool`、`side_effect` 与 `arguments`，仅对已认证调用方可见。SSE 消费方无需轮询：`approval_requested` 与 `approval_decided` Trace 事件会随流推送，事件 `data.approval_id` 可用于提交决定。Run 结束或取消时未决定的审批一律拒绝。
+
+Session 复用：
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/runs \
+  -H "Authorization: Bearer $BALE_HTTP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Continue", "workspace": "/srv/workspace", "session_id": "<uuid>"}'
+```
+
+不传 `session_id` 时服务端生成一个并在 `X-Session-Id` 与 `RunResult.session_id` 返回。未配置 `BALE_HTTP_SESSION_DB` 时携带 `session_id` 返回 400。
+
+限流与认证边界：
+
+- 认证成功时响应带 `X-Bale-Principal`，审计使用同一 `principal`。
+- 超过限流返回 429 与 `Retry-After` 秒数；令牌桶在进程内，重启即清空，多副本之间不共享。
+- `read` scope 的 Key 发起非 `auto_read` 运行返回 403，审批接口也返回 403。
+- `workspace` 仍由调用方指定，服务应只监听本机或可信内网；生产部署仍需在外层加 TLS。
 
 ## 6. 执行沙箱配置
 

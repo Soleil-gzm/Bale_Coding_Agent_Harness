@@ -145,7 +145,7 @@ docker rm -f <container>
 
 ### 401 + `WWW-Authenticate: Bearer`
 
-设置了 `BALE_HTTP_API_KEY`，但请求未带或带错令牌：
+设置了 `BALE_HTTP_API_KEY` 或 `BALE_HTTP_API_KEYS`，但请求未带或带错令牌：
 
 ```bash
 curl http://127.0.0.1:8000/health          # 始终公开
@@ -164,6 +164,20 @@ curl -H "Authorization: Bearer $BALE_HTTP_API_KEY" \
 - 404：`run_id` 不存在或该次运行已结束并从注册表移除。取消只能作用于**进行中**的运行。
 - 409：同一个 `run_id` 已在运行。换一个 id，或等待结束。
 - 取消是协作式的：在下一个迭代边界生效，不会中断正在进行的单次模型/工具调用。
+- 409 `session ... is busy`：同一个 `session_id` 已有进行中的 Run；等待它结束或换一个会话。
+
+### 403 / 429 与 Session 参数错误
+
+- 403：`read` scope 的 Key 只能运行 `approval_mode=auto_read`，也不能调用审批接口。
+- 429：超过 `BALE_HTTP_RATE_LIMIT_PER_MINUTE`，按 `Retry-After` 秒数退避；设为 `0` 可关闭限流。
+- 400 `session_id requires BALE_HTTP_SESSION_DB`：先配置 Session 数据库，再传 `session_id`。
+
+### 审批不出现或写入被拒绝
+
+- 必须设置 `BALE_HTTP_APPROVALS=true`；否则 `approve_writes=false` 时写/执行调用被直接拒绝，不会产生审批。
+- 用 `GET /v1/runs/{run_id}/approvals` 查询挂起项；SSE 客户端会收到 `approval_requested` 与 `approval_decided` Trace 事件。
+- 超过 `BALE_HTTP_APPROVAL_TIMEOUT_SECONDS` 未决定、Run 结束或取消时，剩余审批按拒绝处理。
+- 审批只在进程内保存；进程重启或多副本部署时，调用方需要重新发起 Run。
 
 ### SSE 长时间没有事件
 

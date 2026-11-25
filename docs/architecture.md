@@ -4,7 +4,7 @@
 
 本文同时记录两类内容：
 
-- **当前实现**：B0 工程骨架、Turn/ToolResult 契约、Settings、ModelProvider/FakeProvider、共享 Turn 构造入口；B1 只读 ReAct 运行时（AgentLoop、ToolRegistry、只读内置工具、Workspace 路径防护与 `bale run` 入口）；B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、LocalSandbox、审批策略、ShadowGit 快照与调用幂等）；B3 上下文与会话运行时（Token 预算、历史裁剪、稳定系统前缀、SQLite Session、`after_turn` 记忆、取消与恢复）；B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）；B5 运行报告（Session/Trace 到 Markdown）；B6 本地闭环增强（持久化 Checkpoint 与 `bale undo`、`bale session`/`bale trace` 检查命令、`bale chat` 多轮交互、`move_file`/`delete_file`/`apply_patch`、OpenAI 兼容 Provider、`py.typed`）；B7 HTTP 执行与 SSE（`POST /v1/runs`、`POST /v1/runs/stream`），并补齐 `/health`、可选 Bearer 认证、`run_id` 指定与协作式取消；B8 检索与评测（AST/行窗口 BM25、`bale search`、`bale eval`）；B9 stdio MCP 工具适配，并在 `bale chat` 与 HTTP lifespan 内复用会话，`Bm25Retriever` 在每次 Turn 自动注入检索证据；以及可独立运行的 FastMCP 文件写入示例。
+- **当前实现**：B0 工程骨架、Turn/ToolResult 契约、Settings、ModelProvider/FakeProvider、共享 Turn 构造入口；B1 只读 ReAct 运行时（AgentLoop、ToolRegistry、只读内置工具、Workspace 路径防护与 `bale run` 入口）；B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、LocalSandbox、审批策略、ShadowGit 快照与调用幂等）；B3 上下文与会话运行时（Token 预算、历史裁剪、稳定系统前缀、SQLite Session、`after_turn` 记忆、取消与恢复）；B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）；B5 运行报告（Session/Trace 到 Markdown）；B6 本地闭环增强（持久化 Checkpoint 与 `bale undo`、`bale session`/`bale trace` 检查命令、`bale chat` 多轮交互、`move_file`/`delete_file`/`apply_patch`、OpenAI 兼容 Provider、`py.typed`）；B7 HTTP 执行与 SSE（`POST /v1/runs`、`POST /v1/runs/stream`），并补齐 `/health`、可选 Bearer 认证、`run_id` 指定与协作式取消；B8 检索与评测（AST/行窗口 BM25、`bale search`、`bale eval`）；B9 stdio MCP 工具适配，并在 `bale chat` 与 HTTP lifespan 内复用会话，`Bm25Retriever` 在每次 Turn 自动注入检索证据；以及可独立运行的 FastMCP 文件写入示例；B10 HTTP 生产化（多 Key principal/scope、内存限流、SQLite Session 复用、HTTP 审批、JSONL 审计）与 Docker 执行沙箱。
 - **目标架构**：Coding Agent Harness 的后续设计方向，用于约束模块边界和扩展方式。
 
 除特别注明外，带有“规划”“目标”或“后续”标识的模块均未在当前仓库实现。文档中的目标接口是逻辑契约，不代表已有 Python 类或稳定 API。
@@ -31,7 +31,7 @@
 
 ### 2.2 当前非目标
 
-当前实现不提供 Docker 容器隔离、多模型路由、多智能体调度、Web 前端、HTTP 审批流或生产级隔离。B1 已提供只读 Turn 执行，B2a 已提供受审的本地写入与命令执行，B3 提供基于 SQLite 的本地 Session/Resume，B4 提供本地 JSONL Trace 与按配置费率的成本估算，B6 提供 OpenAI 兼容 Provider（OpenAI/DeepSeek/Ollama）、持久化 Checkpoint 与多轮 CLI。后续实现也应避免在缺少证据时将上述未实现能力视为已经具备。`LocalSandbox` 只是受控开发环境的防护层，不是不可信代码的安全边界。
+当前实现不提供多模型路由、多智能体调度、Web 前端或生产级多副本隔离；HTTP 已有单进程内的认证、限流、Session、审批与审计。B1 已提供只读 Turn 执行，B2a 已提供受审的本地写入与命令执行，B3 提供基于 SQLite 的本地 Session/Resume，B4 提供本地 JSONL Trace 与按配置费率的成本估算，B6 提供 OpenAI 兼容 Provider（OpenAI/DeepSeek/Ollama）、持久化 Checkpoint 与多轮 CLI。后续实现也应避免在缺少证据时将上述未实现能力视为已经具备。`LocalSandbox` 只是受控开发环境的防护层，不是不可信代码的安全边界。
 
 ## 3. 当前实现架构
 
@@ -56,7 +56,8 @@ flowchart LR
 | `providers_openai.py` | OpenAI 兼容 Chat Completions：消息/工具编码、响应解析、429/5xx 退避、错误脱敏 | 非流式，仅标准库 `urllib` |
 | `turns.py` | 校验入口输入并统一构造 `created` Turn | 不创建 workspace，不执行 Turn |
 | `cli.py` | 将命令行参数转换为 TurnRequest 并输出 JSON | 初始化配置和 Provider，但不调用 `complete()` |
-| `http.py` | 应用工厂：`/health`、`POST /v1/turns`、`POST /v1/runs`、`POST /v1/runs/stream`、`POST /v1/runs/{run_id}/cancel` | 可选 Bearer 认证；无限流/HTTP Session/审批流；MCP 由 `BALE_MCP_CONFIG` 在 lifespan 内挂载 |
+| `http.py` | 应用工厂：`/health`、`POST /v1/turns`、`POST /v1/runs`、`POST /v1/runs/stream`、审批查询/决定、`POST /v1/runs/{run_id}/cancel` | 需要 `http_support.py` 提供认证、限流、Session 门禁、审批 Broker 与审计；MCP 由 `BALE_MCP_CONFIG` 在 lifespan 内挂载 |
+| `http_support.py` | HTTP 调用方身份（principal/scope）、内存令牌桶、SQLite Session 并发门禁、审批 Future 与 JSONL 审计 | 全部为进程内状态，不跨副本共享 |
 
 CLI 和 HTTP 对相同输入生成相同的非 ID 字段；`turn_id` 和 `session_id` 分别随机生成。HTTP 环境在调用 `create_app()` 时加载，导入模块本身不读取环境。
 
@@ -237,7 +238,7 @@ flowchart TB
 | `tracing/` | Span、错误、Token、延迟和成本 | 无 Runtime 反向依赖 |
 | `eval/` | 固定任务、确定性验证和报告 | CLI、Workspace、Verifier |
 
-这些路径用于说明职责边界。B1 已实现 `agent/loop.py`、`agent/context.py`（最小前缀）、`agent/tools/registry.py`、`agent/tools/builtin.py`（只读工具）和 `agent/security.py`；B2a 已实现 `agent/approval.py`、`agent/sandbox.py`（LocalSandbox）、`agent/checkpoint.py`（ShadowGit）、`agent/tools/write.py`、`agent/tools/exec.py` 与 `agent/tools/git.py`；B3 已实现 `agent/history.py`、完整的 `agent/context.py`、`agent/session.py` 与 `agent/memory.py`；B4 已实现 `agent/trace.py` 与 `agent/cost.py`；B5 已实现 `agent/report.py`；B6 已实现 `providers_openai.py`、Checkpoint 持久化/`undo`、`session`/`trace`/`chat` CLI 与扩展写入工具；B7 已实现 `http.py` 的执行、SSE、健康检查、Bearer 认证与 `run_id` 取消；B8 已实现 `repo_index/`（AST/行窗口 BM25、`Bm25Retriever` 自动注入与 `search_code`/`bale search`）和 `eval/`（固定任务、确定性文件断言与 `bale eval`）；B9 已实现 `agent/tools/mcp.py`（stdio 连接、分页 `list_tools`、工具命名空间与 `call_tool` 适配，`bale run`/`bale chat`/HTTP 接入）；其余模块（如 Knowledge Retriever、Docker sandbox、HTTP Session/审批/限流）仍为规划，不能当作已有能力。后续实现时应以实际代码和测试为准更新本文。
+这些路径用于说明职责边界。B1 已实现 `agent/loop.py`、`agent/context.py`（最小前缀）、`agent/tools/registry.py`、`agent/tools/builtin.py`（只读工具）和 `agent/security.py`；B2a 已实现 `agent/approval.py`、`agent/sandbox.py`（LocalSandbox）、`agent/checkpoint.py`（ShadowGit）、`agent/tools/write.py`、`agent/tools/exec.py` 与 `agent/tools/git.py`；B3 已实现 `agent/history.py`、完整的 `agent/context.py`、`agent/session.py` 与 `agent/memory.py`；B4 已实现 `agent/trace.py` 与 `agent/cost.py`；B5 已实现 `agent/report.py`；B6 已实现 `providers_openai.py`、Checkpoint 持久化/`undo`、`session`/`trace`/`chat` CLI 与扩展写入工具；B7 已实现 `http.py` 的执行、SSE、健康检查、Bearer 认证与 `run_id` 取消；B8 已实现 `repo_index/`（AST/行窗口 BM25、`Bm25Retriever` 自动注入与 `search_code`/`bale search`）和 `eval/`（固定任务、确定性文件断言与 `bale eval`）；B9 已实现 `agent/tools/mcp.py`（stdio 连接、分页 `list_tools`、工具命名空间与 `call_tool` 适配，`bale run`/`bale chat`/HTTP 接入）；B10 已实现 `http_support.py`（多 Key principal/scope、内存限流、SQLite Session 门禁、HTTP 审批 Broker、JSONL 审计）与 `DockerSandbox`；其余模块（如 Knowledge Retriever、多副本共享状态）仍为规划，不能当作已有能力。后续实现时应以实际代码和测试为准更新本文。
 
 ## 6. 核心逻辑契约
 

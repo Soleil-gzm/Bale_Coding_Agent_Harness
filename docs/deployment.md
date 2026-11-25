@@ -18,7 +18,7 @@
 不适合：
 
 - 运行不受信任的代码。当前镜像没有为每个工具调用启动独立容器，也没有 seccomp/AppArmor 自定义策略；
-- 多租户隔离。HTTP 没有用户体系、限流或 Session 持久化，`workspace` 由调用方指定；
+- 多租户隔离。HTTP 只有单个 `read`/`write` scope，限流与审批状态保存在进程内存；`workspace` 由调用方指定；
 - 直接暴露到公网。镜像默认只绑定 `127.0.0.1`，且不提供 TLS。
 
 ## 2. 前置要求
@@ -82,7 +82,21 @@ BALE_OPENAI_API_KEY=sk-...
 BALE_OPENAI_BASE_URL=https://api.deepseek.com/v1
 BALE_OPENAI_MODEL=deepseek-chat
 BALE_HTTP_API_KEY=change-me
+BALE_HTTP_SESSION_DB=/data/sessions.db
+BALE_HTTP_RATE_LIMIT_PER_MINUTE=60
+BALE_HTTP_AUDIT_LOG=/data/audit.jsonl
 ```
+
+HTTP 生产化开关：
+
+| 变量 | 作用 |
+|---|---|
+| `BALE_HTTP_API_KEYS` | 多 Key（JSON 对象），每个 Key 带 `principal` 与 `read`/`write` scope；与 `BALE_HTTP_API_KEY` 可并存 |
+| `BALE_HTTP_SESSION_DB` | SQLite Session；容器内建议写 `/data/sessions.db` |
+| `BALE_HTTP_RATE_LIMIT_PER_MINUTE` | 每调用方每分钟令牌数；`0` 关闭 |
+| `BALE_HTTP_APPROVALS` | `true` 时写/执行调用等待 HTTP 审批，超时拒绝 |
+| `BALE_HTTP_APPROVAL_TIMEOUT_SECONDS` | 审批等待上限，默认 120 |
+| `BALE_HTTP_AUDIT_LOG` | JSONL 审计；容器内建议写 `/data/audit.jsonl` |
 
 然后重建容器使环境生效：
 
@@ -149,6 +163,24 @@ curl.exe -N -X POST http://127.0.0.1:8000/v1/runs/stream `
 curl.exe -X POST http://127.0.0.1:8000/v1/runs/<run_id>/cancel `
   -H "Authorization: Bearer change-me"
 ```
+
+### 5.4 HTTP 审批
+
+设置 `BALE_HTTP_APPROVALS=true` 后，`approve_writes=false` 的 Run 在遇到写/执行工具时会挂起，直到有人决定：
+
+```powershell
+# 查看挂起的审批（需要 run_id）
+Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/runs/inspect-1/approvals `
+  -Headers @{ Authorization = "Bearer change-me" } | ConvertTo-Json -Depth 5
+
+# 批准或拒绝
+$decision = @{ decision = "approve" } | ConvertTo-Json
+Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/runs/inspect-1/approvals/<approval_id> `
+  -Method Post -Headers @{ Authorization = "Bearer change-me" } `
+  -ContentType "application/json" -Body $decision
+```
+
+非流式 Run 需要在另一个终端查询并决定；SSE 客户端可直接根据 `approval_requested` / `approval_decided` Trace 事件触发决定。超过 `BALE_HTTP_APPROVAL_TIMEOUT_SECONDS` 未决定时按拒绝处理，Run 结束或取消也会拒绝剩余审批。
 
 ## 6. 在容器内使用 CLI
 

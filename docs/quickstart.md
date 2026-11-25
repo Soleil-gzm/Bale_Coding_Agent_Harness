@@ -426,9 +426,9 @@ curl -X POST http://127.0.0.1:8000/v1/runs \
   }'
 ```
 
-返回 HTTP 200 与 `RunResult`。`approve_writes` 默认 `false`，写/执行工具会被拒绝；HTTP 没有交互式审批，只有可信调用方才应设为 `true`。
+返回 HTTP 200 与 `RunResult`。`approve_writes` 默认 `false`，未开启审批时写/执行工具会被直接拒绝；把它设为 `true` 等于信任所有调用方，只应在可信环境使用。
 
-设置 `BALE_HTTP_API_KEY` 后，所有 `/v1` 请求都需要 `Authorization: Bearer <key>`，缺失或错误返回 401 与 `WWW-Authenticate: Bearer`；`/health` 始终公开：
+设置 `BALE_HTTP_API_KEY` 后，所有 `/v1` 请求都需要 `Authorization: Bearer <key>`，缺失或错误返回 401 与 `WWW-Authenticate: Bearer`；`/health` 始终公开。多调用方时用 `BALE_HTTP_API_KEYS` 给每个 Key 配置 `principal` 与 `scope`：
 
 ```bash
 curl http://127.0.0.1:8000/health
@@ -446,6 +446,30 @@ curl -X POST http://127.0.0.1:8000/v1/runs/inspect-1/cancel
 
 取消是协作式的，在下一个迭代边界生效；未知或已结束的 `run_id` 返回 404，运行中复用相同 `run_id` 返回 409。设置 `BALE_MCP_CONFIG` 可让 HTTP 应用启动时挂载 MCP 工具；配置损坏时应用启动失败。
 
+设置 `BALE_HTTP_SESSION_DB` 后，Run 会写入 SQLite，并返回 `X-Session-Id`；把该值作为下一次请求的 `session_id` 即可复用会话。同一 `session_id` 的并发 Run 返回 409，未配置数据库时携带 `session_id` 返回 400：
+
+```bash
+export BALE_HTTP_SESSION_DB=.bale/sessions.db
+curl -X POST http://127.0.0.1:8000/v1/runs \
+  -H "Authorization: Bearer $BALE_HTTP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Continue", "workspace": "/srv/workspace", "session_id": "<uuid>"}'
+```
+
+设置 `BALE_HTTP_APPROVALS=true` 后，写/执行调用会挂起等待 HTTP 审批；`approval_mode=auto_read` 仍然直接拒绝写入：
+
+```bash
+curl http://127.0.0.1:8000/v1/runs/inspect-1/approvals \
+  -H "Authorization: Bearer $BALE_HTTP_API_KEY"
+
+curl -X POST http://127.0.0.1:8000/v1/runs/inspect-1/approvals/<approval_id> \
+  -H "Authorization: Bearer $BALE_HTTP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"decision": "approve"}'
+```
+
+审批列表包含工具名、`side_effect` 与 `arguments`；`read` scope 的 Key 不能审批。SSE 客户端可直接消费 `approval_requested` 与 `approval_decided` Trace 事件，不必轮询。超时（`BALE_HTTP_APPROVAL_TIMEOUT_SECONDS`，默认 120 秒）或 Run 结束/取消时，剩余审批按拒绝处理。`BALE_HTTP_RATE_LIMIT_PER_MINUTE` 启用按调用方的内存限流，超限返回 429 与 `Retry-After`；`BALE_HTTP_AUDIT_LOG` 追加运行与审批的 JSONL 审计。
+
 需要容器化运行时，见[Docker 部署指南](deployment.md)。
 
 以 SSE 流式观察同一 Turn：
@@ -462,7 +486,7 @@ curl -N -X POST http://127.0.0.1:8000/v1/runs/stream \
 
 事件顺序为 `event: run`（携带 `run_id`）、若干 `event: trace`（`turn_started`、`model_call`、`tool_call`、`turn_finished` 等），最后是 `event: result`；执行异常会发送 `event: error`。客户端断开时服务端会取消执行。
 
-当前 HTTP 接口没有限流、Session 持久化或 HTTP 审批流；自动检索默认开启，每次请求按 `workspace` 惰性构建索引。`workspace` 由调用方指定，服务应只监听本机或可信内网。
+HTTP 的 Session、限流、审批与审计都在单进程内维护，多副本之间不共享，也不提供 TLS；`workspace` 由调用方指定，服务应只监听本机或可信内网。自动检索默认开启，每次请求按 `workspace` 惰性构建索引。
 
 ## 6. 启动 MCP 服务端
 

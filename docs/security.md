@@ -18,7 +18,7 @@ Bale 的定位是**本地单用户开发工具**，不是多租户服务。默�
 | `DockerSandbox` | 每命令一次性容器、无网络、只读根文件系统、非 root、cap-drop、CPU/内存/PID 限额、超时清理 | 依赖宿主 Docker daemon；镜像内容与内核共享仍是信任假设，未配置自定义 seccomp/AppArmor |
 | `ShadowGit` | 独立 git-dir 快照、Diff 与恢复 | 不加密、不防篡改；恢复会覆盖当前工作区 |
 | MCP 适配 | stdio 子进程、工具级审批与超时、错误归一化 | 不隔离服务器权限；`read_only` 只是声明 |
-| HTTP 入口 | 可选 Bearer 认证、`/health`、运行取消、默认拒绝写入 | 无限流、无 HTTP Session、无交互式审批、无 TLS |
+| HTTP 入口 | 可选 Bearer 认证（多 Key + principal/scope）、内存限流、SQLite Session、HTTP 审批、JSONL 审计、运行取消、默认拒绝写入 | 无 TLS；限流为单进程内存；`workspace` 仍由调用方指定 |
 | 上下文注入 | 记忆与检索片段标注为 untrusted | 不能阻止模型执行其中的恶意指令 |
 
 ## 工作区边界
@@ -80,10 +80,16 @@ CLI 的 `--yes` 使用 `auto_approve`，HTTP 的 `approve_writes=true` 同理。
 
 ## HTTP 入口
 
-- 设置 `BALE_HTTP_API_KEY` 后，所有 `/v1` 路由要求 `Authorization: Bearer <key>`，使用 `hmac.compare_digest` 比较；`/health` 始终公开。
+- 设置 `BALE_HTTP_API_KEY` 或 `BALE_HTTP_API_KEYS` 后，所有 `/v1` 路由要求 `Authorization: Bearer <key>`，使用 `hmac.compare_digest` 逐个比较；`/health` 始终公开。
+- 多 Key 时每个 Key 映射 `principal` 与 `scope`。`read` 只能运行 `approval_mode=auto_read` 且 `approve_writes=false` 的 Turn，也不能调用审批接口；认证结果通过 `X-Bale-Principal` 回传并写入审计。
+- 限流按 `principal`（未配置 Key 时按客户端 IP）使用进程内令牌桶；超过 `BALE_HTTP_RATE_LIMIT_PER_MINUTE` 返回 429 与 `Retry-After`。`/health` 不消耗配额。令牌桶不跨进程共享，重启即清空。
+- `BALE_HTTP_SESSION_DB` 把 Run 记录写入本地 SQLite；同一 `session_id` 的并发 Run 返回 409。Session 记录包含用户消息、工具状态与答案，应按源码同等级别保护该文件。
+- `BALE_HTTP_APPROVALS=true` 时，写/执行调用会挂起等待 `POST /v1/runs/{run_id}/approvals/{approval_id}` 的决定；超时（`BALE_HTTP_APPROVAL_TIMEOUT_SECONDS`）或 Run 结束/取消一律按拒绝处理。审批参数来自模型输出，可能包含提示注入内容，批准前必须核对工具名与参数，而不是只看模型摘要。
+- `GET /v1/runs/{run_id}/approvals` 暴露 `arguments`；只应允许可信调用方访问，且不要在日志中留存完整参数。
+- `BALE_HTTP_AUDIT_LOG` 追加 `principal`、`run_id`、`session_id`、状态与审批结果；不记录提示词、答案和工具参数，但可能包含工作区路径。
 - `workspace` 由调用方指定，服务端不会限制到你预期的目录；**只应在本机或可信内网监听**，公网部署需自行加 TLS、认证网关与限流。
-- 默认 `approve_writes=false`，写/执行工具被拒绝；把它设为 `true` 等于信任所有调用方。
-- 当前没有 HTTP Session、限流、审计持久化或交互式审批；`run_id` 取消是协作式的，不保证立即停止正在进行的模型/工具调用。
+- 默认 `approve_writes=false` 且未开启审批时，写/执行工具直接拒绝；把它设为 `true` 等于信任所有调用方。
+- `run_id` 取消是协作式的，不保证立即停止正在进行的模型/工具调用；取消会同时拒绝该 Run 挂起的审批。
 - SSE 会回传 Trace 事件；Trace 不包含提示词、答案与工具参数，但仍可能包含路径与状态，注意日志访问控制。
 
 ## 上下文注入与提示注入
@@ -113,6 +119,8 @@ CLI 的 `--yes` 使用 `auto_approve`，HTTP 的 `approve_writes=true` 同理。
 - 默认无 Docker/VM 隔离；启用 `DockerSandbox` 后有容器级文件系统、网络与资源限制，但仍是共享宿主内核，不是 VM 级隔离。
 - `DockerSandbox` 依赖宿主可用的 Docker CLI/daemon；Bale 自身运行在容器内时，需要额外安装 Docker CLI 并挂载 socket，部署镜像默认不包含。
 - 未提供自定义 seccomp/AppArmor 配置、镜像签名校验或每命令网络白名单。
-- 无细粒度权限（按工具/路径/命令的 ACL）、无审批审计日志、无速率限制。
+- 无细粒度权限（按工具/路径/命令的 ACL）；HTTP 只有 `read`/`write` 两种 scope。
+- 限流与审批状态保存在进程内存，多副本部署不共享；重启后挂起的审批与令牌桶都会失效。
+- 审批超时只按拒绝处理，不会自动通知调用方；需要可靠通知时应消费 `approval_requested` Trace 事件。
 - `read_only` 与 `untrusted` 都是约定/标注，不是强制机制。
-- 并发运行之间没有锁；Snapshot、Session 与 MCP 会话均按单进程假设设计。
+- 同一 Session 的并发 Run 会被拒绝，但不同 Session 共用同一工作区时仍可能互相覆盖 Snapshot 与文件；Session、审批与 MCP 会话均按单进程假设设计。

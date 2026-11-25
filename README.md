@@ -54,11 +54,13 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 
 ### HTTP 执行与 SSE
 
-- `POST /v1/runs` 在服务端执行一个 Turn，返回与 CLI 一致的 `RunResult`；`approve_writes` 默认 `false`，写/执行工具会被拒绝。
+- `POST /v1/runs` 在服务端执行一个 Turn，返回与 CLI 一致的 `RunResult`；`approve_writes` 默认 `false`，未开启审批时写/执行工具被拒绝。
 - `POST /v1/runs/stream` 返回 `text/event-stream`：先发送 `event: run`（`run_id`），再逐条发送 `event: trace`，结束时发送 `event: result`；执行异常发送 `event: error`。
-- `GET /health` 始终公开；设置 `BALE_HTTP_API_KEY` 后所有 `/v1` 路由要求 `Authorization: Bearer`。
+- `GET /health` 始终公开；设置 `BALE_HTTP_API_KEY` 或 `BALE_HTTP_API_KEYS` 后所有 `/v1` 路由要求 `Authorization: Bearer`，认证结果写入 `X-Bale-Principal`。
 - 两个执行接口都返回 `X-Run-Id`；请求可自带 `run_id`，并用 `POST /v1/runs/{run_id}/cancel` 在下一个迭代边界协作取消，未知或已结束的 `run_id` 返回 404。
-- HTTP 不使用 SQLite Session、不提供 HTTP 审批流；`approve_writes=true` 表示调用方已自行确认风险，应仅在本机或内网使用。
+- `BALE_HTTP_SESSION_DB` 启用 SQLite Session：响应返回 `X-Session-Id`，请求可传 `session_id` 复用；同一会话的并发 Run 返回 409。
+- `BALE_HTTP_APPROVALS=true` 时写/执行调用挂起，`GET/POST /v1/runs/{run_id}/approvals[/{approval_id}]` 用于查询与决定；超时、结束或取消按拒绝处理。
+- `BALE_HTTP_RATE_LIMIT_PER_MINUTE` 按调用方限流（429 + `Retry-After`）；`BALE_HTTP_AUDIT_LOG` 追加运行与审批的 JSONL 审计。审批与限流状态在进程内，多副本不共享。
 
 ### 代码检索与评测
 
@@ -106,17 +108,17 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 当前实现提供契约、Turn 构造入口和受控的本地执行闭环，不是完整的 Coding Agent：
 
 - OpenAI 兼容 Provider 只实现非流式 Chat Completions（`temperature=0`），不支持流式输出、多模型路由或结构化输出参数。
-- 不包含 Docker Sandbox 或不可信代码隔离；`LocalSandbox` 仅适用于受控开发场景。
-- Session 持久化基于本地 SQLite 文件，不提供多进程协调、远程存储或 HTTP Session 接口。
+- 默认 `LocalSandbox` 仅适用于受控开发场景；`DockerSandbox` 提供容器级隔离，但仍共享宿主内核与 Docker daemon。
+- Session 持久化基于本地 SQLite 文件，不提供多进程协调或远程存储；HTTP 侧只支持单进程内复用。
 - Checkpoint 目录已可持久化并支持 `bale undo`，但没有快照浏览/清理命令，也依赖本机 `git`。
 - Trace 为本地追加 JSONL，无轮转、采样或远程导出；`estimated_cost` 只是按配置费率的估算，不代表 Provider 账单。
 - 运行报告是只读 Markdown 投影，只提供 CLI 入口，不包含 HTML/PDF 导出或 HTTP 报告接口。
 - 检索仅支持无第三方依赖的 BM25 词法排序（Python 按顶层定义切块，其余按行窗口），不包含向量/混合检索、增量更新或持久化索引；评测只执行 JSON 固定任务与文件级断言，不包含 Docker 隔离、自动生成任务或模型评分。
 - MCP 只支持 stdio transport；`bale run` 每次重建会话，`bale chat` 与 HTTP 入口在各自生命周期内复用一个会话，不包含 SSE/HTTP transport、工具缓存、工具级审批界面或跨进程会话复用。`read_only` 是调用方声明，不代表服务器已被隔离。
-- HTTP 接口提供可选 Bearer 认证、`/health`、`run_id` 指定与协作式取消，但没有限流、Session 或交互式审批；默认拒绝写入，`approve_writes=true` 只应由可信调用方使用。
+- HTTP 接口提供 Bearer 认证（多 Key + `read`/`write` scope）、内存限流、SQLite Session、HTTP 审批、JSONL 审计、`run_id` 指定与协作式取消；没有 TLS、多副本共享状态或按工具/路径的 ACL，`approve_writes=true` 只应由可信调用方使用。
 - 自动检索按用户消息在每次 Turn 注入有限片段，不感知对话历史，也不保证召回完整；检索异常时静默跳过，不阻断 Turn。
 - `bale chat` 的跨 Turn 连续性依赖 Session 记忆摘要，不携带完整历史，也不会自动压缩超长对话。
-- 审批只在 CLI 中提供交互确认与 `--yes`，没有 HTTP 审批流。
+- 审批在 CLI 中提供交互确认与 `--yes`，在 HTTP 中通过 `BALE_HTTP_APPROVALS` 与审批接口提供；两者都不判断命令内容是否安全。
 - MCP 示例的文件名精度为秒，同一秒内的重复调用可能覆盖同名文件。
 - MCP 输出目录相对于进程当前工作目录，不应将其误认为安全沙箱。
 
@@ -154,7 +156,8 @@ Bale_Coding_Agent_Harness/
 │   ├── py.typed              # PEP 561 类型标记
 │   ├── turns.py              # TurnRequest 与共享 build_turn()
 │   ├── cli.py                # bale turn/search/eval/run/chat/report/session/trace/undo
-│   ├── http.py               # /v1/turns、/v1/runs(/stream)、/health、取消
+│   ├── http.py               # /v1/turns、/v1/runs(/stream)、审批、取消、/health
+│   ├── http_support.py       # API Key/principal、限流、审批 Broker、审计
 │   ├── repo_index/           # BM25 分词、AST/行窗口切块、检索与注入
 │   ├── eval/                 # 固定任务、运行器与 Markdown/JSON 报告
 │   └── agent/                # ReAct 运行时
@@ -318,7 +321,7 @@ export BALE_OPENAI_MODEL=qwen2.5-coder:7b
 bale run --message "Inspect the repository" --workspace "$PWD" --yes
 ```
 
-启动 HTTP 应用（`BALE_HTTP_API_KEY` 可启用 Bearer 认证，`BALE_MCP_CONFIG` 可挂载 MCP 工具）：
+启动 HTTP 应用（`BALE_HTTP_API_KEY`/`BALE_HTTP_API_KEYS` 启用认证，`BALE_HTTP_SESSION_DB`/`BALE_HTTP_APPROVALS`/`BALE_HTTP_RATE_LIMIT_PER_MINUTE`/`BALE_HTTP_AUDIT_LOG` 开启生产化能力，`BALE_MCP_CONFIG` 可挂载 MCP 工具）：
 
 ```bash
 uvicorn bale_harness.http:create_app --factory
