@@ -3,7 +3,8 @@
 Each task runs in a fresh temporary workspace copied from its fixture, so the
 evaluation is repeatable and never mutates ``examples/eval``. Writes and
 commands are auto-approved because fixtures are trusted; a real Provider should
-be configured through ``BALE_PROVIDER`` for meaningful task results.
+be configured through ``BALE_PROVIDER`` for meaningful task results. A
+``sandbox_factory`` can isolate task commands, for example in Docker.
 """
 
 import shutil
@@ -18,12 +19,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from bale_harness.agent.approval import auto_approve
 from bale_harness.agent.loop import build_default_loop
+from bale_harness.agent.sandbox import Sandbox
 from bale_harness.agent.security import WorkspaceError, WorkspaceGuard
 from bale_harness.contracts import Turn
 from bale_harness.eval.task import Check, EvalTask, fixture_directory
 from bale_harness.providers import FakeProvider, ModelProvider
 
 ProviderFactory = Callable[[EvalTask], ModelProvider]
+SandboxFactory = Callable[[Path], Sandbox]
 OutcomeStatus = Literal["passed", "failed", "error"]
 
 
@@ -117,7 +120,10 @@ def _check_content(check: Check, target: Path) -> tuple[bool, str]:
 
 
 async def run_task(
-    task: EvalTask, fixture: Path, provider: ModelProvider
+    task: EvalTask,
+    fixture: Path,
+    provider: ModelProvider,
+    sandbox_factory: SandboxFactory | None = None,
 ) -> TaskOutcome:
     """Copy ``fixture``, run one agent turn, and evaluate the task checks."""
     started = time.perf_counter()
@@ -125,7 +131,12 @@ async def run_task(
     workspace = temp_root / "workspace"
     try:
         shutil.copytree(fixture, workspace)
-        loop = build_default_loop(provider, workspace, approver=auto_approve)
+        loop = build_default_loop(
+            provider,
+            workspace,
+            approver=auto_approve,
+            sandbox=sandbox_factory(workspace) if sandbox_factory else None,
+        )
         turn = Turn(
             message=task.message,
             workspace=workspace,
@@ -174,6 +185,7 @@ async def run_tasks(
     tasks: Sequence[EvalTask],
     base_dir: Path,
     provider_factory: ProviderFactory | None = None,
+    sandbox_factory: SandboxFactory | None = None,
 ) -> EvalReport:
     """Run tasks sequentially with a fresh provider and workspace per task."""
     factory: ProviderFactory = provider_factory or (lambda task: FakeProvider())
@@ -192,7 +204,7 @@ async def run_tasks(
                 )
             )
             continue
-        outcomes.append(await run_task(task, fixture, factory(task)))
+        outcomes.append(await run_task(task, fixture, factory(task), sandbox_factory))
 
     passed = sum(1 for outcome in outcomes if outcome.status == "passed")
     failed = sum(1 for outcome in outcomes if outcome.status == "failed")

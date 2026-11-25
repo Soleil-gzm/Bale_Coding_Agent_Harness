@@ -1,5 +1,6 @@
 import asyncio
 import json
+import shutil
 import sys
 import tempfile
 from collections import Counter
@@ -15,7 +16,7 @@ from bale_harness.agent.cost import CostRates
 from bale_harness.agent.loop import AgentLoop, RunResult, build_default_loop
 from bale_harness.agent.messages import ToolCall, ToolSpec
 from bale_harness.agent.report import build_report
-from bale_harness.agent.sandbox import create_sandbox
+from bale_harness.agent.sandbox import Sandbox, create_sandbox
 from bale_harness.agent.security import WorkspaceError, WorkspaceGuard
 from bale_harness.agent.session import SessionStore, TurnRecord
 from bale_harness.agent.tools.code_search import (
@@ -256,6 +257,14 @@ def eval_command(
     json_output: Annotated[
         Path | None, typer.Option("--json", help="Write the JSON report to this file")
     ] = None,
+    sandbox: Annotated[
+        str | None,
+        typer.Option(help="Execution sandbox for task commands: 'local' or 'docker'"),
+    ] = None,
+    sandbox_image: Annotated[
+        str | None,
+        typer.Option("--sandbox-image", help="Container image for the docker sandbox"),
+    ] = None,
 ) -> None:
     """Run fixed evaluation tasks on fixture copies and verify their checks."""
     try:
@@ -267,11 +276,35 @@ def eval_command(
         raise typer.BadParameter(f"no tasks in {task_file}")
 
     settings = Settings()
+    backend = sandbox or settings.sandbox_backend
+    if backend not in {"local", "docker"}:
+        raise typer.BadParameter(
+            f"unsupported sandbox {backend!r}; use 'local' or 'docker'"
+        )
+    if backend == "docker" and shutil.which("docker") is None:
+        raise typer.BadParameter(
+            "docker executable not found; install Docker or use --sandbox local"
+        )
+    image = sandbox_image or settings.sandbox_image
+
+    def sandbox_factory(workspace: Path) -> Sandbox:
+        return create_sandbox(
+            backend,
+            workspace,
+            image=image,
+            network=settings.sandbox_network,
+            memory=settings.sandbox_memory,
+            cpus=settings.sandbox_cpus,
+            pids_limit=settings.sandbox_pids_limit,
+            user=settings.sandbox_user,
+        )
+
     report: EvalReport = asyncio.run(
         run_tasks(
             task_list,
             task_file.parent,
             lambda _task: create_provider(settings),
+            sandbox_factory,
         )
     )
     markdown = render_markdown(report)
