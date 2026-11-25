@@ -139,6 +139,45 @@ def test_jsonl_exporter_swallows_unserializable_payload(tmp_path: Path) -> None:
     assert [event.event for event in events] == ["turn_finished"]
 
 
+def test_jsonl_exporter_rotates_when_exceeding_max_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "trace.jsonl"
+    turn = _turn(tmp_path)
+
+    async def scenario() -> None:
+        exporter = JsonlTraceExporter(path, max_bytes=400, backups=2)
+        await exporter.bind(turn)
+        for index in range(12):
+            await exporter.emit("model_call", iteration=index)
+
+    asyncio.run(scenario())
+
+    backups = [tmp_path / f"trace.jsonl.{index}" for index in (1, 2)]
+    assert path.exists()
+    assert all(backup.exists() for backup in backups)
+    assert not (tmp_path / "trace.jsonl.3").exists()
+    assert path.stat().st_size <= 400
+    assert all(backup.stat().st_size <= 400 for backup in backups)
+    # Every retained line is a complete, parseable event.
+    assert len(_read(backups[0])) > 0
+    assert len(_read(path)) > 0
+
+
+def test_jsonl_exporter_without_limit_never_rotates(tmp_path: Path) -> None:
+    path = tmp_path / "trace.jsonl"
+    turn = _turn(tmp_path)
+
+    async def scenario() -> None:
+        exporter = JsonlTraceExporter(path)
+        await exporter.bind(turn)
+        for index in range(20):
+            await exporter.emit("model_call", iteration=index)
+
+    asyncio.run(scenario())
+
+    assert len(_read(path)) == 20
+    assert list(tmp_path.glob("trace.jsonl.*")) == []
+
+
 def test_null_exporter_writes_nothing(tmp_path: Path) -> None:
     turn = _turn(tmp_path)
 
