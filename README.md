@@ -2,7 +2,7 @@
 
 Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目标是将模型交互、工具治理、上下文管理、隔离执行、状态恢复和执行证据组织为可扩展的薄内核。
 
-**当前仓库处于早期建设阶段。** 已落地 B0 工程基础、B1 只读 ReAct 运行时、B2a 写入运行时、B3 上下文/会话运行时、B4 追踪/成本运行时、B5 运行报告、B6 本地闭环增强、B7 HTTP 执行/SSE、B8 检索/评测和 B9 MCP 工具接入：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider 与 OpenAI 兼容 Provider、只创建 Turn 的 CLI/HTTP 入口，带审批、ShadowGit 快照和本地 Sandbox 的 `bale run`，Token 预算、历史裁剪、SQLite Session 与取消恢复，JSONL Trace 与可选成本估算，基于 Session/Trace 的 Markdown 报告，持久化 Checkpoint 与 `bale undo`，`bale chat` 多轮交互，`bale session`/`bale trace` 检查命令，`move_file`/`delete_file`/`apply_patch` 写入工具，执行 Turn 的 `POST /v1/runs` 与 SSE 流式 `POST /v1/runs/stream`，以及 BM25 代码检索（`search_code`、`bale search`）、固定任务评测（`bale eval`）和 stdio MCP 工具适配（`bale run --mcp-config`、`bale chat --mcp-config`、HTTP `BALE_MCP_CONFIG`）。HTTP 入口另提供 `/health`、可选 Bearer 认证和按 `run_id` 的协作式取消；Python 文件按顶层定义切块，Agent Loop 会按用户消息自动注入检索片段。Docker 执行沙箱（每次工具调用独立容器）、向量检索与 HTTP 审批流仍未实现；HTTP 服务本身已支持 Docker 部署。
+**当前仓库处于早期建设阶段。** 已落地 B0 工程基础、B1 只读 ReAct 运行时、B2a 写入运行时、B3 上下文/会话运行时、B4 追踪/成本运行时、B5 运行报告、B6 本地闭环增强、B7 HTTP 执行/SSE、B8 检索/评测和 B9 MCP 工具接入：可安装 Python 包、核心数据契约、配置校验、离线 FakeProvider 与 OpenAI 兼容 Provider、只创建 Turn 的 CLI/HTTP 入口，带审批、ShadowGit 快照和本地 Sandbox 的 `bale run`，Token 预算、历史裁剪、SQLite Session 与取消恢复，JSONL Trace 与可选成本估算，基于 Session/Trace 的 Markdown 报告，持久化 Checkpoint 与 `bale undo`，`bale chat` 多轮交互，`bale session`/`bale trace` 检查命令，`move_file`/`delete_file`/`apply_patch` 写入工具，执行 Turn 的 `POST /v1/runs` 与 SSE 流式 `POST /v1/runs/stream`，以及 BM25 代码检索（`search_code`、`bale search`）、固定任务评测（`bale eval`）和 stdio MCP 工具适配（`bale run --mcp-config`、`bale chat --mcp-config`、HTTP `BALE_MCP_CONFIG`）。HTTP 入口另提供 `/health`、可选 Bearer 认证和按 `run_id` 的协作式取消；Python 文件按顶层定义切块，Agent Loop 会按用户消息自动注入检索片段。Docker 执行沙箱（每次工具调用独立容器）已落地，可用 `--sandbox docker` 或 `BALE_SANDBOX_BACKEND=docker` 启用；向量检索与 HTTP 审批流仍未实现。HTTP 服务本身已支持 Docker 部署。
 
 ## 文档
 
@@ -33,6 +33,7 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - `WorkspaceGuard` 阻止 `..` 与符号链接逃逸；写入采用临时文件加原子替换；`apply_patch` 要求每条旧文本恰好匹配一次，全部成功才写盘。
 - `PolicyApprover` 支持 `auto_read`、`approve_write`、`approve_all`，无审批人时写/执行一律拒绝。
 - `LocalSandbox` 提供命令 deny-list、环境变量白名单、cwd 限定、超时和输出截断；它不是不可信代码的安全边界。
+- `DockerSandbox` 为每条命令启动独立容器：工作区挂载到 `/workspace`，默认无网络、只读根文件系统、非 root、CPU/内存/PID 限额，超时或取消时强制清理；通过 `--sandbox docker` 或 `BALE_SANDBOX_BACKEND=docker` 启用。
 - `ShadowGit` 使用独立 git-dir 做基线与逐迭代快照，输出相对基线的 Diff，不读写工作区自己的 `.git`。
 - `bale run` 驱动上述闭环，输出包含 `diff` 与 `checkpoints` 的 `RunResult` JSON。
 

@@ -1,6 +1,6 @@
 # 安全模型与信任边界
 
-Bale 的定位是**本地单用户开发工具**，不是多租户服务，也不是不可信代码的执行沙箱。本文说明各层实际提供的保护、明确的非保证，以及部署时的最低要求。
+Bale 的定位是**本地单用户开发工具**，不是多租户服务。默认的 `LocalSandbox` 不是不可信代码的安全边界；可选的 `DockerSandbox` 提供容器级隔离，但宿主 Docker daemon 仍是信任边界。本文说明各层实际提供的保护、明确的非保证，以及部署时的最低要求。
 
 ## 信任模型
 
@@ -15,6 +15,7 @@ Bale 的定位是**本地单用户开发工具**，不是多租户服务，也�
 | `WorkspaceGuard` | 规范化并拒绝 `..`、绝对路径越界与符号链接逃逸 | 不是操作系统级沙箱；子进程仍可访问工作区外文件 |
 | 审批策略 | 读工具自动放行；写/执行按 `ApprovalMode` 逐次审批，无审批器即拒绝 | 不判断命令内容是否安全；`--yes`/`auto_approve` 会全部放行 |
 | `LocalSandbox` | 不经 shell、命令拒绝列表、环境变量白名单、工作目录限制、超时、输出截断、进程树清理 | 明确**不是**安全边界；通过解释器仍可执行任意代码 |
+| `DockerSandbox` | 每命令一次性容器、无网络、只读根文件系统、非 root、cap-drop、CPU/内存/PID 限额、超时清理 | 依赖宿主 Docker daemon；镜像内容与内核共享仍是信任假设，未配置自定义 seccomp/AppArmor |
 | `ShadowGit` | 独立 git-dir 快照、Diff 与恢复 | 不加密、不防篡改；恢复会覆盖当前工作区 |
 | MCP 适配 | stdio 子进程、工具级审批与超时、错误归一化 | 不隔离服务器权限；`read_only` 只是声明 |
 | HTTP 入口 | 可选 Bearer 认证、`/health`、运行取消、默认拒绝写入 | 无限流、无 HTTP Session、无交互式审批、无 TLS |
@@ -27,7 +28,7 @@ Bale 的定位是**本地单用户开发工具**，不是多租户服务，也�
 注意：
 
 - `search` 的 `--path` 与 `exec` 的 `cwd` 也走同一守卫。
-- `exec` 只约束**工作目录**，不约束命令参数；`python -c "...open('/etc/passwd')..."` 仍可越界。需要强隔离时使用容器或虚拟机（尚未实现）。
+- `exec` 只约束**工作目录**，不约束命令参数；`LocalSandbox` 下 `python -c "...open('/etc/passwd')..."` 仍可越界。需要强隔离时启用 `DockerSandbox`（`--sandbox docker` / `BALE_SANDBOX_BACKEND=docker`）。
 - 工作区根本身若是指向外部的符号链接，会被解析为真实路径；请确保启动时传入的是预期目录。
 
 ## 审批与副作用
@@ -50,6 +51,16 @@ CLI 的 `--yes` 使用 `auto_approve`，HTTP 的 `approve_writes=true` 同理。
 - 工作目录必须在工作区内；默认超时 120 秒；stdout/stderr 各截断到 30,000 字符；超时后尝试结束进程树。
 
 这些措施降低误操作风险，但**不能**阻止解释器或编译器执行任意代码。不要把 `LocalSandbox` 当作安全边界。
+
+[`DockerSandbox`](../src/bale_harness/agent/sandbox.py) 为每条命令启动独立容器：
+
+- 工作区以 bind mount 挂载到 `/workspace`，容器内 `cwd` 不能逃逸；
+- 默认 `--network none`、`--read-only`、`--tmpfs /tmp`、`--cap-drop ALL`、`no-new-privileges`；
+- 默认非 root 用户（`10001:10001`），资源限额由 `BALE_SANDBOX_MEMORY`、`BALE_SANDBOX_CPUS`、`BALE_SANDBOX_PIDS_LIMIT` 控制；
+- 只注入固定环境变量与工具显式参数，不继承宿主环境；
+- 超时或取消时执行 `docker rm -f`，避免遗留容器。
+
+仍需注意：Docker 容器不是虚拟机，宿主内核、Docker daemon 与镜像供应链都是信任边界；工作区可写时，容器内命令仍能修改挂载内容。不要运行来源不明的镜像，也不要在容器内挂载额外敏感目录。
 
 ## 快照与恢复
 
@@ -85,7 +96,7 @@ CLI 的 `--yes` 使用 `auto_approve`，HTTP 的 `approve_writes=true` 同理。
 ## 密钥与敏感数据
 
 - `BALE_OPENAI_API_KEY` 使用 `SecretStr`，不会在 `repr`/日志中直接展开；`.env` 不应提交。
-- `LocalSandbox` 默认丢弃密钥类环境变量；MCP 子进程按 SDK 白名单继承，显式 `env` 可能带入密钥，需自行审查。
+- `LocalSandbox` 默认丢弃密钥类环境变量；`DockerSandbox` 不继承宿主环境，只注入固定变量与工具参数；MCP 子进程按 SDK 白名单继承，显式 `env` 可能带入密钥，需自行审查。
 - Trace 只记录事件、耗时与状态，不记录提示词、答案和工具参数；不要把密钥写进路径、工具名或自定义 metadata。
 - 运行报告与 Trace 文件可能包含工作区路径、命令与退出码；分享前先脱敏。
 
@@ -99,7 +110,9 @@ CLI 的 `--yes` 使用 `auto_approve`，HTTP 的 `approve_writes=true` 同理。
 
 ## 已知限制
 
-- 无 Docker/VM 隔离；无文件系统、网络或系统调用级沙箱。
+- 默认无 Docker/VM 隔离；启用 `DockerSandbox` 后有容器级文件系统、网络与资源限制，但仍是共享宿主内核，不是 VM 级隔离。
+- `DockerSandbox` 依赖宿主可用的 Docker CLI/daemon；Bale 自身运行在容器内时，需要额外安装 Docker CLI 并挂载 socket，部署镜像默认不包含。
+- 未提供自定义 seccomp/AppArmor 配置、镜像签名校验或每命令网络白名单。
 - 无细粒度权限（按工具/路径/命令的 ACL）、无审批审计日志、无速率限制。
 - `read_only` 与 `untrusted` 都是约定/标注，不是强制机制。
 - 并发运行之间没有锁；Snapshot、Session 与 MCP 会话均按单进程假设设计。

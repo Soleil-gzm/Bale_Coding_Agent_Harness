@@ -90,9 +90,56 @@ bale run --workspace . --message "..." --no-shadow-git
 
 `--checkpoint-dir or --session-db is required`：undo 需要知道快照位置；`no checkpoint at ...`：目录不存在或尚未产生快照。先运行一次带持久化参数的 `bale run`/`bale chat`。
 
-### `unsupported sandbox ...; only 'local' is available`
+### `unsupported sandbox ...; use 'local' or 'docker'`
 
-当前只有本地执行适配器；Docker Sandbox 尚未实现。去掉自定义 `--sandbox` 或传 `local`。
+`--sandbox` 只接受 `local` 或 `docker`。检查拼写，或删除该参数使用 `BALE_SANDBOX_BACKEND` 的默认值。
+
+### `docker executable not found` 或 `Cannot connect to the Docker daemon`
+
+`--sandbox docker` 需要当前进程能直接执行 `docker` 并访问 daemon：
+
+```bash
+docker version
+docker info
+```
+
+- Windows/macOS：启动 Docker Desktop，等引擎显示 running。
+- Linux：确认当前用户在 `docker` 组，或调整 socket 权限。
+- Bale 自身运行在容器内时，部署镜像不含 Docker CLI，也未挂载 socket；应在宿主机运行 Bale 再启用 Docker 沙箱。
+
+### Docker 沙箱里 `No module named pytest` / 命令不存在
+
+`BALE_SANDBOX_IMAGE` 决定容器内可用工具。默认 `python:3.11-slim` 没有 pytest、git 或项目依赖：
+
+```bash
+docker build -t my-project/runner:latest .
+export BALE_SANDBOX_IMAGE=my-project/runner:latest
+```
+
+镜像需要包含 Python、pytest 以及被测项目运行时。构建前先 `docker pull`，避免首次运行把镜像拉取时间算进命令超时。
+
+### Docker 沙箱写工作区报 `Permission denied`
+
+容器默认以 `10001:10001` 运行。Linux 上宿主目录需要对该 UID 可写：
+
+```bash
+sudo chown -R 10001:10001 ./workspace
+```
+
+或把 `BALE_SANDBOX_USER` 设为当前用户的 `uid:gid`。Windows/macOS 的 Docker Desktop 绑定挂载通常不受容器 UID 限制。
+
+### Docker 沙箱内网络请求失败
+
+默认 `--network none`。需要联网时设置 `BALE_SANDBOX_NETWORK=true`，并自行评估数据外泄风险。
+
+### Docker 沙箱命令超时后仍有容器
+
+正常情况下超时会执行 `docker rm -f`。若进程被强杀，可手动清理：
+
+```bash
+docker ps -a --filter label=bale.sandbox=1
+docker rm -f <container>
+```
 
 ## HTTP
 

@@ -1,6 +1,11 @@
 # Docker 部署指南
 
-本页说明如何把 Bale 的 HTTP 服务构建为容器镜像并运行。容器部署解决的是「进程与依赖打包」，**不是** B04 计划中的 Docker 沙箱适配器：Agent 的 `shell`/`run_tests` 仍然通过 `LocalSandbox` 在容器内以同一用户执行。
+本页说明如何把 Bale 的 HTTP 服务构建为容器镜像并运行。部署容器解决的是「进程与依赖打包」，与 `DockerSandbox` 是两层不同机制：
+
+- 部署容器运行 Bale 服务本身；
+- `DockerSandbox` 由 Bale 在宿主机上为每条 `shell`/`run_tests` 启动一次性 sibling 容器。
+
+本部署镜像不包含 Docker CLI，也不挂载 Docker socket，因此在容器内仍使用 `LocalSandbox`。需要容器级命令隔离时，应在宿主机运行 Bale，并设置 `BALE_SANDBOX_BACKEND=docker`；不要为了省事把 `/var/run/docker.sock` 暴露给不可信调用方。
 
 ## 1. 适用范围与边界
 
@@ -212,13 +217,14 @@ docker volume inspect bale-harness_bale-data
 
 仍需注意：
 
-- `LocalSandbox` 的命令允许列表与工作区限制在容器内继续生效，但它**不是**针对恶意代码的安全边界；
+- 部署容器内的 `LocalSandbox` 命令允许列表与工作区限制继续生效，但它**不是**针对恶意代码的安全边界；
+- `DockerSandbox` 需要宿主 Docker CLI/daemon；本镜像未安装 Docker CLI，容器内启用会得到 `docker executable not found`；
 - 容器内可以读取 `/app`、`/etc` 等非工作区文件，只是不能写入镜像层；
 - 没有 CPU/内存/磁盘配额；需要时在 Compose 中加 `mem_limit`、`cpus`，或在 `docker run` 时加 `--memory`、`--cpus`；
 - 没有 TLS。对外提供服务时应放在反向代理或内网网关之后；
 - 不要把宿主目录以可写方式挂载到 `/` 或用户主目录。
 
-如需更严格的隔离，应实现 B04 的独立执行容器，而不是复用本部署容器。
+如需更严格的命令隔离，请在宿主机运行 Bale 并启用 `BALE_SANDBOX_BACKEND=docker`，由 `DockerSandbox` 启动独立执行容器；不要复用本部署容器作为执行沙箱。
 
 ## 10. 运维命令
 

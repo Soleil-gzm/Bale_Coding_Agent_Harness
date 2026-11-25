@@ -32,6 +32,13 @@ CLI 参数 > 进程环境变量 > 当前工作目录的 .env > 代码默认值
 | `BALE_MCP_CONFIG` | 路径，默认空 | HTTP 应用启动时加载的 MCP 服务器 JSON |
 | `BALE_RETRIEVAL_ENABLED` | 布尔，默认 `true` | 是否在每个 Turn 自动注入 BM25 检索片段 |
 | `BALE_RETRIEVAL_TOP_K` | 整数，默认 `5`，范围 1–20 | 自动检索注入的片段上限 |
+| `BALE_SANDBOX_BACKEND` | `local` 或 `docker`，默认 `local` | 命令执行沙箱；`docker` 为每条命令启动独立容器 |
+| `BALE_SANDBOX_IMAGE` | 字符串，默认 `python:3.11-slim` | Docker 沙箱镜像；必须包含工作区需要的运行时与测试依赖 |
+| `BALE_SANDBOX_NETWORK` | 布尔，默认 `false` | 是否给沙箱容器启用网络；默认 `none` |
+| `BALE_SANDBOX_MEMORY` | 字符串，默认 `1g` | 容器内存上限，透传给 `docker run --memory` |
+| `BALE_SANDBOX_CPUS` | 正浮点数，默认 `1.0` | 容器 CPU 上限，透传给 `docker run --cpus` |
+| `BALE_SANDBOX_PIDS_LIMIT` | 整数，默认 `256`，最小 16 | 容器进程数上限 |
+| `BALE_SANDBOX_USER` | 字符串，默认 `10001:10001` | 容器内运行用户；Linux 宿主机需保证挂载目录对该 UID 可写 |
 
 无密钥样例见仓库根目录 [.env.example](../.env.example)。
 
@@ -89,6 +96,7 @@ Token 数与成本都是确定性估算，不等于 Provider 账单。默认 Fak
 | `BALE_HTTP_API_KEY` | 设置后 `/v1` 全部要求 `Authorization: Bearer <key>`；缺失或错误返回 401 与 `WWW-Authenticate: Bearer` |
 | `BALE_MCP_CONFIG` | 应用 lifespan 内加载并复用 MCP 会话；文件缺失或 JSON/字段非法时拒绝启动 |
 | `BALE_TRACE_PATH` | HTTP 执行同样写入默认 Trace；SSE 还会把事件推送到响应流 |
+| `BALE_SANDBOX_BACKEND` | HTTP 执行同样使用该沙箱；`docker` 需要服务进程能访问 Docker daemon |
 
 启动示例：
 
@@ -99,7 +107,40 @@ uvicorn bale_harness.http:create_app --factory --host 127.0.0.1 --port 8000
 
 HTTP 当前没有限流、Session 持久化或交互式审批流；`workspace` 由调用方指定，服务应只监听本机或可信内网。写入默认被拒绝，只有可信调用方才应传 `approve_writes=true`。
 
-## 6. MCP 配置
+## 6. 执行沙箱配置
+
+默认 `local` 使用 `LocalSandbox`，在宿主进程内执行命令。选择 `docker` 后，每次 `shell`/`run_tests` 都会启动一个一次性容器：
+
+```bash
+export BALE_SANDBOX_BACKEND=docker
+export BALE_SANDBOX_IMAGE=my-project/runner:latest
+bale run --workspace "$PWD" --message "Run the test suite" --yes
+```
+
+CLI 也可以单次覆盖：
+
+```bash
+bale run --sandbox docker --sandbox-image my-project/runner:latest ...
+```
+
+容器默认配置：
+
+- 工作区绑定挂载到 `/workspace`，`cwd` 映射到其中的相对目录；
+- `--network none`，除非 `BALE_SANDBOX_NETWORK=true`；
+- 只读根文件系统，`/tmp` 为 64 MiB tmpfs；
+- `--cap-drop ALL`、`no-new-privileges`、非 root 用户；
+- `--memory`、`--cpus`、`--pids-limit` 限额；
+- 命令超时或运行取消时执行 `docker rm -f` 清理；
+- 只注入 `HOME`、`BALE_SANDBOX`、`PYTHONUNBUFFERED` 与工具显式传入的环境变量，不继承宿主环境。
+
+使用要求：
+
+- 宿主机必须能直接执行 `docker`；Bale 自身运行在容器内时，需要额外安装 Docker CLI 并挂载 socket，部署镜像默认不包含；
+- 镜像里必须有命令需要的运行时。`run_tests` 通过镜像内的 `python -m pytest` 执行，因此默认 `python:3.11-slim` 只能运行 `shell` 类命令，不能直接跑 pytest；
+- `/workspace` 的写权限由 `BALE_SANDBOX_USER` 与宿主挂载权限共同决定。Linux 上可执行 `sudo chown -R 10001:10001 <workspace>`，或把 `BALE_SANDBOX_USER` 设为当前 UID/GID；
+- 只读根文件系统会阻止容器内 `pip install`、写 `/app` 等操作；需要构建依赖时请预构建镜像。
+
+## 7. MCP 配置
 
 单次运行：
 
@@ -115,7 +156,7 @@ bale run --workspace "$PWD" --message "写一条 MCP 笔记" \
 
 配置结构与示例见[快速启动 §4.11、§8](quickstart.md)和 [examples/mcp/servers.json](../examples/mcp/servers.json)。
 
-## 7. 检索配置
+## 8. 检索配置
 
 自动检索在每个 Turn 开始时按用户消息检索工作区，把有限片段作为独立的 untrusted 段落写入系统前缀：
 
@@ -128,7 +169,7 @@ export BALE_RETRIEVAL_TOP_K=3         # 仅保留前 3 条
 - 自动检索不感知对话历史，也不保证召回完整；检索异常会静默跳过，不阻断 Turn。
 - 索引按工作区惰性构建，不写磁盘；关闭自动注入后仍可使用 `search_code` 或 `bale search`。
 
-## 8. CLI 运行参数与配置的关系
+## 9. CLI 运行参数与配置的关系
 
 | 参数 | 覆盖/补充的配置 | 说明 |
 |---|---|---|
@@ -140,7 +181,7 @@ export BALE_RETRIEVAL_TOP_K=3         # 仅保留前 3 条
 | `--shadow-git` / `--no-shadow-git` | 无环境变量 | 默认开启快照 |
 | `--max-iterations`、`--token-budget`、`--cost-budget` | 无环境变量 | 单次运行预算 |
 
-## 9. 校验失败与安全处理
+## 10. 校验失败与安全处理
 
 - **启动失败**：`provider=openai` 且远程端点缺少有效 Key；`BALE_RETRIEVAL_TOP_K` 越界；`BALE_MCP_CONFIG` 损坏。修复配置后再启动，不要通过关闭校验绕过。
 - **HTTP 401**：检查 `Authorization: Bearer` 是否与 `BALE_HTTP_API_KEY` 完全一致；`/health` 不需要认证。

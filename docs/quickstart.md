@@ -75,7 +75,9 @@ cp .env.example .env
 | `BALE_RETRIEVAL_ENABLED` | 是否在每次 Turn 自动注入 BM25 检索片段，默认 `true` |
 | `BALE_RETRIEVAL_TOP_K` | 自动检索片段上限，默认 `5`，范围 1–20 |
 
-远程 `openai` 端点缺少有效 Key 时会在初始化阶段失败；`http://localhost`、`http://127.0.0.1` 等本地端点可免 Key。`.env` 已被 Git 忽略，不要提交真实密钥或打印完整 Settings。配置优先级、CLI 参数映射与校验失败见[配置参考](configuration.md)。
+远程 `openai` 端点缺少有效 Key 时会在初始化阶段失败；`http://localhost`、`http://127.0.0.1` 等本地端点可免 Key。`.env` 已被 Git 忽略，不要提交真实密钥或打印完整 Settings。
+
+命令执行默认使用 `LocalSandbox`。需要容器隔离时设置 `BALE_SANDBOX_BACKEND=docker`，并按需配置 `BALE_SANDBOX_IMAGE`、`BALE_SANDBOX_MEMORY`、`BALE_SANDBOX_CPUS` 等变量；完整说明见[配置参考 §6](configuration.md)。配置优先级、CLI 参数映射与校验失败见[配置参考](configuration.md)。
 
 常用端点示例：
 
@@ -144,8 +146,27 @@ bale run \
 - `--approval-mode`：`auto_read`（写/执行一律拒绝）、`approve_write`（默认，写/执行逐次审批）、`approve_all`（全部审批）。
 - 未传 `--yes` 且进程不是交互终端时，写/执行会被拒绝并回报给模型，不会阻塞等待输入。
 - `--shadow-git/--no-shadow-git`（默认开启）：在系统临时目录建立独立 git-dir，为每次迭代创建快照，并把相对基线的 Diff 写入结果的 `diff` 字段；不会读写工作区自己的 `.git`。
-- `shell` 不接受管道、重定向或串联等 shell 元字符，推荐直接传参数数组。`run_tests` 使用当前 Python 解释器执行 pytest。
-- `LocalSandbox` 只是受控开发环境的防护层，提供命令 deny-list、环境变量白名单、cwd 限定、超时和输出截断，**不是**不可信代码的安全边界；容器隔离属于后续里程碑。
+- `shell` 不接受管道、重定向或串联等 shell 元字符，推荐直接传参数数组。`run_tests` 使用当前沙箱的 Python 解释器执行 pytest。
+- `LocalSandbox` 是默认执行层，提供命令 deny-list、环境变量白名单、cwd 限定、超时和输出截断，**不是**不可信代码的安全边界。
+
+需要容器隔离时改用 Docker 沙箱：
+
+```bash
+bale run \
+  --message "Run the tests" \
+  --workspace "$PWD" \
+  --sandbox docker \
+  --sandbox-image my-project/runner:latest \
+  --yes
+```
+
+- 每条 `shell`/`run_tests` 启动一次性容器，工作区挂载到 `/workspace`。
+- 默认无网络、只读根文件系统、非 root、CPU/内存/PID 限额；超时或取消会清理容器。
+- 容器只注入少量固定环境变量，不继承宿主 `PATH`、API Key 或代理配置。
+- 镜像必须自带所需运行时与测试依赖；`python:3.11-slim` 不含 pytest，运行 `run_tests` 请换用项目自己的镜像。
+- 也可以用环境变量 `BALE_SANDBOX_BACKEND=docker`、`BALE_SANDBOX_IMAGE=...` 设为默认。
+
+完整配置见[配置参考 §6](configuration.md)，安全边界见[安全模型](security.md)。
 
 ### 4.3 会话持久化与恢复
 
@@ -618,7 +639,7 @@ python -m compileall examples
 ## 12. 下一步
 
 - 按目标选择阅读路径：[文档索引](README.md)。
-- 调整环境变量、Provider 或 HTTP/MCP 开关：[配置参考](configuration.md)。
+- 调整环境变量、Provider、执行沙箱或 HTTP/MCP 开关：[配置参考](configuration.md)。
 - 用 Docker 构建并运行 HTTP 服务：[Docker 部署](deployment.md)。
 - 了解当前实现与目标模块的边界：[架构设计](architecture.md)。
 - 部署或评审前确认信任边界：[安全模型](security.md)。

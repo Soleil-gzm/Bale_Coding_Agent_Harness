@@ -91,7 +91,7 @@ flowchart LR
 | `agent/tools/registry.py` | `Tool` 协议与 `ToolRegistry`：注册、参数校验、审批、调用幂等、超时、错误归一化、只读并发、持久化结果播种 | 写/执行工具无审批人时一律拒绝 |
 | `agent/tools/builtin.py` | `read_file`、`list_files`、`search_files`，输出有界 | 全部只读且并发安全 |
 | `agent/approval.py` | `PolicyApprover`：按 `auto_read`/`approve_write`/`approve_all` 判定，缺省拒绝 | 只做决策，不负责交互或持久化 |
-| `agent/sandbox.py` | `Sandbox` 端口与 `LocalSandbox`：argv 执行、命令 deny-list、环境变量白名单、cwd 限定、超时与输出截断 | 非安全边界，Docker 适配待 B2b |
+| `agent/sandbox.py` | `Sandbox` 端口、`LocalSandbox` 与 `DockerSandbox`：本地 argv 执行，以及每命令一次性容器（无网络、只读根、资源限额、超时清理） | `LocalSandbox` 非安全边界；`DockerSandbox` 依赖宿主 Docker daemon |
 | `agent/checkpoint.py` | `ShadowGit`：独立 git-dir 的基线快照、逐迭代快照、diff 与恢复；可跨进程复用 | 不读写用户 `.git` |
 | `agent/tools/write.py` | `write_file`、`edit_file`、`move_file`、`delete_file`、`apply_patch`：原子写与精确匹配前置校验 | 写副作用，需审批 |
 | `agent/tools/exec.py` | `shell`、`run_tests`：拒绝 shell 元字符，交由 Sandbox 执行 | 执行副作用，需审批 |
@@ -336,6 +336,7 @@ B3 的实际实现：
 | pytest、Ruff、pip-tools | 离线测试、静态检查和可复现安装 | 本地通过不等于远程 CI 已运行 |
 | `sqlite3`（标准库） | B3 Session、消息、已执行调用与记忆持久化 | 单机文件数据库，不提供分布式协调 |
 | BM25（标准库实现） | B8 代码检索、检索注入与 `search_code` | 无倒排持久化、增量更新或向量召回 |
+| Docker（可选） | `DockerSandbox` 为每条命令启动独立容器，提供网络、文件系统与资源隔离 | 需要宿主 Docker daemon 与预构建镜像；共享宿主内核 |
 | 本地文本文件 | MCP 示例无需外部服务 | 不提供并发、权限或持久化保证 |
 
 ### 8.2 目标技术栈
@@ -348,7 +349,7 @@ B3 的实际实现：
 | 状态 | SQLite | 轻量、可恢复、低部署成本 |
 | 工具协议 | 官方 MCP Python SDK | 与当前示例保持同一生态 |
 | 代码检索 | Python AST、BM25 | 结构定位和确定性对照实验 |
-| 隔离执行 | DockerSandbox | 非 root、无网、资源限额和清理 |
+| 隔离执行 | DockerSandbox（已实现） | 非 root、无网、资源限额和清理；后续可补自定义 seccomp/镜像校验 |
 | 观测 | JSONL Trace、Usage/Cost Ledger | 无外部依赖即可审计 |
 | 测试 | pytest、pytest-asyncio、ruff | 单元、契约、集成和静态检查 |
 
@@ -362,7 +363,7 @@ B3 的实际实现：
 |---|---|---|
 | ModelProvider | AgentLoop | 消息与工具定义输入、结构化输出、Token 用量、取消 |
 | Tool | ToolRegistry | Schema、副作用元数据、超时执行、结构化结果 |
-| Sandbox | 内置工具与执行策略 | Workspace 隔离、进程控制、资源限制、清理 |
+| Sandbox | 内置工具与执行策略 | Workspace 隔离、进程控制、资源限制、清理；已提供 `LocalSandbox` 与 `DockerSandbox` |
 | Retriever | ContextBuilder | 按命名空间、过滤条件和 Top-K 返回 SearchHit |
 | SessionStore | Session Service | append-only 消息、Turn 状态、恢复点；B3 已提供 SQLite 实现 |
 | CheckpointStore | AgentLoop | 快照、基线、撤销、调用 ID 幂等记录 |
@@ -385,13 +386,13 @@ B3 的实际实现：
 | 风险 | 设计控制 |
 |---|---|
 | 路径逃逸 | canonical path、Workspace allowlist、符号链接检查 |
-| 不可信命令 | Sandbox、非 root、无外部网络、资源限额和超时 |
+| 不可信命令 | `DockerSandbox`、非 root、无外部网络、资源限额和超时 |
 | 密钥泄漏 | 环境变量白名单、日志脱敏、最小挂载 |
 | 不可信工具内容 | 数据与指令分离、长度限制、写前审批 |
 | 重复副作用 | 调用 ID、原子写、前置内容校验、Checkpoint |
 | MCP 服务故障 | 服务隔离、命名空间、超时和资源清理 |
 
-本地执行只能用于受控开发场景，不能作为不可信代码的安全边界。
+`LocalSandbox` 只能用于受控开发场景，不能作为不可信代码的安全边界；`DockerSandbox` 提供容器级隔离，但宿主 Docker daemon 与镜像供应链仍是信任边界。
 
 ## 11. 测试与验证设计
 

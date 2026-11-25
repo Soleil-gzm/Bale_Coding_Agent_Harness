@@ -1,6 +1,6 @@
 # Bale 文档索引
 
-Bale Coding Agent Harness 是一个本地优先的 Coding Agent 运行时与工程脚手架：CLI/HTTP 入口、ReAct 循环、工具治理、Session/恢复、ShadowGit 快照、Trace/成本、BM25 检索、评测 harness 与 stdio MCP 适配。
+Bale Coding Agent Harness 是一个本地优先的 Coding Agent 运行时与工程脚手架：CLI/HTTP 入口、ReAct 循环、工具治理、本地/Docker 执行沙箱、Session/恢复、ShadowGit 快照、Trace/成本、BM25 检索、评测 harness 与 stdio MCP 适配。
 
 文档按「先跑起来 → 理解边界 → 排错与评测」组织。命令默认在仓库根目录执行，Python 为 3.11+。
 
@@ -13,6 +13,7 @@ Bale Coding Agent Harness 是一个本地优先的 Coding Agent 运行时与工�
 | 调整环境变量与运行参数 | [配置参考](configuration.md) | [快速启动 §3](quickstart.md) |
 | 接入 HTTP / SSE | [快速启动 §5](quickstart.md) | [安全模型 · HTTP](security.md#http-入口) |
 | 用 Docker 部署 HTTP 服务 | [Docker 部署](deployment.md) | [配置参考](configuration.md) |
+| 隔离 shell / run_tests | [配置参考 §6](configuration.md) | [安全模型 · DockerSandbox](security.md#本地执行) |
 | 接入 MCP 工具 | [快速启动 §4.11、§6–8](quickstart.md) | [架构 §3.3–3.5](architecture.md) |
 | 理解运行时设计 | [架构设计](architecture.md) | [安全模型](security.md) |
 | 排查失败 | [问题排查](troubleshooting.md) | [快速启动 §10](quickstart.md) |
@@ -24,7 +25,7 @@ Bale Coding Agent Harness 是一个本地优先的 Coding Agent 运行时与工�
 |---|---|---|
 | [README](../README.md) | 能力概览、功能边界、项目结构、常用命令 | 所有人 |
 | [quickstart.md](quickstart.md) | 安装、配置、CLI/HTTP/MCP 的可复制命令与预期输出 | 首次使用者、接入方 |
-| [configuration.md](configuration.md) | 配置优先级、环境变量总表、Provider/HTTP/MCP/检索开关与校验失败 | 部署者、接入方 |
+| [configuration.md](configuration.md) | 配置优先级、环境变量总表、Provider/HTTP/MCP/检索/执行沙箱开关与校验失败 | 部署者、接入方 |
 | [deployment.md](deployment.md) | 镜像构建、Compose 运行、卷、认证、MCP 挂载与容器加固 | 部署者、运维 |
 | [architecture.md](architecture.md) | 当前实现分层、模块职责、核心契约、数据流、测试与演进约束 | 贡献者、评审者 |
 | [troubleshooting.md](troubleshooting.md) | 按现象组织的安装/运行/HTTP/MCP/检索/评测排错 | 使用者、运维 |
