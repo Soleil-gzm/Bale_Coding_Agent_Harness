@@ -1,4 +1,4 @@
-"""BM25-backed code search tool for the workspace."""
+"""Code search tool for the workspace, lexical with optional vectors."""
 
 import time
 from pathlib import Path
@@ -14,7 +14,7 @@ from bale_harness.agent.tools.common import (
 )
 from bale_harness.agent.tools.registry import BaseTool
 from bale_harness.contracts import ToolResult
-from bale_harness.repo_index import Bm25Index, SearchHit
+from bale_harness.repo_index import Embedder, HybridIndex, SearchHit
 
 DEFAULT_LIMIT = 10
 MAX_LIMIT = 50
@@ -32,13 +32,14 @@ def format_hits(hits: list[SearchHit]) -> str:
 
 
 class SearchCodeTool(BaseTool):
-    """Rank workspace code chunks against a query with an in-memory index."""
+    """Rank workspace code chunks against a query with a hybrid index."""
 
     spec = ToolSpec(
         name="search_code",
         description=(
             "Rank workspace code chunks for a text or identifier query with "
-            "BM25; returns path, line range, score, and snippet."
+            "BM25 and optional vector recall; returns path, line range, "
+            "score, and snippet."
         ),
         parameters={
             "type": "object",
@@ -53,9 +54,19 @@ class SearchCodeTool(BaseTool):
         timeout_ms=60_000,
     )
 
-    def __init__(self, guard: WorkspaceGuard) -> None:
+    def __init__(
+        self,
+        guard: WorkspaceGuard,
+        *,
+        embedder: Embedder | None = None,
+        alpha: float = 0.5,
+        index_path: Path | None = None,
+    ) -> None:
         self._guard = guard
-        self._indexes: dict[Path, Bm25Index] = {}
+        self._embedder = embedder
+        self._alpha = alpha
+        self._index_path = index_path
+        self._indexes: dict[Path, HybridIndex] = {}
 
     def validate_arguments(self, arguments: dict[str, Any]) -> None:
         query = arguments.get("query")
@@ -90,7 +101,12 @@ class SearchCodeTool(BaseTool):
 
         index = self._indexes.get(root)
         if index is None:
-            index = Bm25Index.from_directory(root)
+            index = HybridIndex(
+                root,
+                embedder=self._embedder,
+                alpha=self._alpha,
+                index_path=self._index_path,
+            )
             self._indexes[root] = index
 
         hits = index.search(query, limit)
@@ -105,6 +121,7 @@ class SearchCodeTool(BaseTool):
                 "hits": len(hits),
                 "indexed_files": index.file_count,
                 "indexed_chunks": index.chunk_count,
+                "vector_search": index.vector_enabled,
             },
             truncated=output_truncated,
             start=start,

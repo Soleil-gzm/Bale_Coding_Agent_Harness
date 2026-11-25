@@ -51,6 +51,7 @@ from bale_harness.agent.tools.write import build_write_tools
 from bale_harness.agent.trace import TraceExporter
 from bale_harness.contracts import ApprovalMode, Turn
 from bale_harness.providers import ModelProvider
+from bale_harness.repo_index import Embedder
 
 
 class Retriever(Protocol):
@@ -675,6 +676,9 @@ def build_default_loop(
     cost_rates: CostRates | None = None,
     extra_tools: Sequence[Tool] | None = None,
     retriever: Retriever | None = None,
+    search_embedder: Embedder | None = None,
+    search_alpha: float = 0.5,
+    search_index_path: Path | None = None,
 ) -> AgentLoop:
     """Construct a loop wired to the workspace tools.
 
@@ -684,7 +688,8 @@ def build_default_loop(
     same governance. ``approver`` is either a synchronous ``Decider`` or an
     ``Approver`` that decides asynchronously (for example over HTTP). A
     ``retriever`` supplies untrusted workspace excerpts for the system prefix
-    of each turn.
+    of each turn. ``search_embedder`` enables hybrid vector ranking for the
+    ``search_code`` tool; without it the tool stays lexical.
     """
     guard = WorkspaceGuard(workspace)
     if approver is not None and hasattr(approver, "approve"):
@@ -693,7 +698,12 @@ def build_default_loop(
         policy = PolicyApprover(approval_mode, approver)  # type: ignore[arg-type]
     registry = ToolRegistry(policy)
     tools: list[Tool] = [
-        *build_default_tools(guard),
+        *build_default_tools(
+            guard,
+            search_embedder=search_embedder,
+            search_alpha=search_alpha,
+            search_index_path=search_index_path,
+        ),
         *build_write_tools(guard),
         *build_exec_tools(sandbox or LocalSandbox(guard)),
         *build_git_tools(checkpoint),

@@ -116,13 +116,20 @@ class CodeChunk:
 
 @dataclass(frozen=True)
 class SearchHit:
-    """One ranked code chunk returned by :meth:`Bm25Index.search`."""
+    """One ranked code chunk returned by an index search.
+
+    ``score`` is the ranking value used by the index that produced the hit.
+    ``lexical_score`` and ``vector_score`` are populated only by hybrid
+    indexes so callers can explain why a chunk ranked where it did.
+    """
 
     path: str
     start_line: int
     end_line: int
     score: float
     snippet: str
+    lexical_score: float | None = None
+    vector_score: float | None = None
 
 
 def _relative_parts(path: Path, root: Path) -> tuple[str, ...] | None:
@@ -315,12 +322,17 @@ class Bm25Index:
     def chunk_count(self) -> int:
         return len(self._chunks)
 
-    def search(self, query: str, limit: int = 10) -> list[SearchHit]:
-        """Return the highest-scoring chunks for ``query``."""
-        terms = sorted(set(tokenize(query)))
-        if not terms or not self._chunks or self._avg_length <= 0 or limit <= 0:
-            return []
+    @property
+    def vector_enabled(self) -> bool:
+        """BM25-only indexes never expose vector scores."""
+        return False
+
+    def scores(self, query: str) -> list[float]:
+        """Return one BM25 score per chunk, aligned with index order."""
         scores = [0.0] * len(self._chunks)
+        terms = sorted(set(tokenize(query)))
+        if not terms or not self._chunks or self._avg_length <= 0:
+            return scores
         for term in terms:
             idf = self._idf.get(term)
             if idf is None:
@@ -334,7 +346,13 @@ class Bm25Index:
                     1 - self._b + self._b * length / self._avg_length
                 )
                 scores[index] += idf * frequency * (self._k1 + 1) / denominator
+        return scores
 
+    def search(self, query: str, limit: int = 10) -> list[SearchHit]:
+        """Return the highest-scoring chunks for ``query``."""
+        if limit <= 0:
+            return []
+        scores = self.scores(query)
         ranked = sorted(
             ((score, index) for index, score in enumerate(scores) if score > 0),
             key=lambda item: (-item[0], self._chunks[item[1]].path, item[1]),

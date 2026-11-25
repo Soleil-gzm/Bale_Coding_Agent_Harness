@@ -16,6 +16,7 @@ from bale_harness.agent.tools.common import (
 )
 from bale_harness.agent.tools.registry import BaseTool
 from bale_harness.contracts import ToolResult
+from bale_harness.repo_index import Embedder
 
 MAX_READ_BYTES = 64 * 1024
 MAX_LIST_ENTRIES = 500
@@ -217,11 +218,26 @@ class SearchFilesTool(BaseTool):
             return file_path.name
 
 
-def build_default_tools(guard: WorkspaceGuard) -> list[BaseTool]:
-    """Return the built-in read-only tools wired to the given workspace guard."""
+def build_default_tools(
+    guard: WorkspaceGuard,
+    *,
+    search_embedder: Embedder | None = None,
+    search_alpha: float = 0.5,
+    search_index_path: Path | None = None,
+) -> list[BaseTool]:
+    """Return the built-in read-only tools wired to the given workspace guard.
+
+    ``search_embedder`` enables hybrid vector ranking for ``search_code``;
+    without it the tool stays lexical.
+    """
     return [
         ReadFileTool(guard),
         ListFilesTool(guard),
         SearchFilesTool(guard),
-        SearchCodeTool(guard),
+        SearchCodeTool(
+            guard,
+            embedder=search_embedder,
+            alpha=search_alpha,
+            index_path=search_index_path,
+        ),
     ]

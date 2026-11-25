@@ -68,7 +68,7 @@ from bale_harness.http_support import (
     SessionGate,
 )
 from bale_harness.providers import ModelProvider, create_provider
-from bale_harness.repo_index import Bm25Retriever
+from bale_harness.repo_index import create_embedder, create_retriever
 from bale_harness.settings import Settings
 from bale_harness.turns import TurnRequest, build_turn
 
@@ -276,11 +276,8 @@ async def _execute(
     checkpoint = ShadowGit(request.workspace) if request.shadow_git else None
     if tracer is None and settings.trace_path:
         tracer = JsonlTraceExporter(settings.trace_path)
-    retriever = (
-        Bm25Retriever(request.workspace, top_k=settings.retrieval_top_k)
-        if settings.retrieval_enabled
-        else None
-    )
+    retriever = create_retriever(settings, request.workspace)
+    search_embedder = create_embedder(settings)
     sandbox = create_sandbox(
         settings.sandbox_backend,
         request.workspace,
@@ -304,6 +301,9 @@ async def _execute(
         cost_rates=_cost_rates(settings),
         extra_tools=context.extra_tools,
         retriever=retriever,
+        search_embedder=search_embedder,
+        search_alpha=settings.retrieval_alpha,
+        search_index_path=settings.retrieval_index_path,
     )
     turn = Turn(
         message=request.message,

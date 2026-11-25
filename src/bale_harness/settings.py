@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     mcp_config: Path | None = None
     retrieval_enabled: bool = True
     retrieval_top_k: int = Field(default=5, ge=1, le=20)
+    retrieval_hybrid: bool = True
+    retrieval_alpha: float = Field(default=0.5, ge=0.0, le=1.0)
+    retrieval_index_path: Path | None = None
+    embedding_model: str | None = None
+    embedding_base_url: str | None = None
+    embedding_api_key: SecretStr | None = None
     sandbox_backend: Literal["local", "docker"] = "local"
     sandbox_image: str = Field(default="python:3.11-slim", min_length=1)
     sandbox_network: bool = False
