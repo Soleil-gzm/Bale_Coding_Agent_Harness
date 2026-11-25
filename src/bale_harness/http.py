@@ -6,7 +6,8 @@ same turn and streams trace events as Server-Sent Events, ending with a
 ``result`` event. ``GET /health`` is public; every ``/v1`` route requires a
 bearer token when ``BALE_HTTP_API_KEY`` or ``BALE_HTTP_API_KEYS`` is set.
 ``POST /v1/runs/{run_id}/cancel`` cooperatively cancels an in-flight run at the
-next iteration boundary.
+next iteration boundary. With a session database configured,
+``GET /v1/runs/{run_id}/report`` renders the run's session as Markdown.
 
 With ``BALE_HTTP_APPROVALS=true``, side-effecting tool calls block until a
 caller approves or denies them through
@@ -48,6 +49,7 @@ from bale_harness.agent.checkpoint import ShadowGit
 from bale_harness.agent.cost import CostRates
 from bale_harness.agent.loop import RunResult, build_default_loop
 from bale_harness.agent.messages import ToolCall, ToolSpec
+from bale_harness.agent.report import build_report
 from bale_harness.agent.sandbox import create_sandbox
 from bale_harness.agent.session import SessionStore
 from bale_harness.agent.tools.mcp import load_mcp_config, mcp_tools
@@ -56,6 +58,7 @@ from bale_harness.agent.trace import (
     JsonlTraceExporter,
     QueueTraceExporter,
     TraceExporter,
+    read_trace,
 )
 from bale_harness.contracts import ApprovalMode, Turn
 from bale_harness.http_support import (
@@ -128,11 +131,24 @@ class RunHandle:
     cancel: asyncio.Event = field(default_factory=asyncio.Event)
 
 
+MAX_RUN_HISTORY = 200
+
+
+@dataclass(frozen=True)
+class RunRecord:
+    """Routing information kept so a finished run can render a report."""
+
+    session_id: UUID
+    workspace: Path
+    principal: str
+
+
 class RunRegistry:
-    """Track in-flight runs so they can be cancelled by id."""
+    """Track in-flight runs and the recent run-to-session mapping."""
 
     def __init__(self) -> None:
         self._runs: dict[str, RunHandle] = {}
+        self._history: dict[str, RunRecord] = {}
 
     def start(self, run_id: str | None = None) -> RunHandle:
         """Register a run, generating an id when the caller did not supply one."""
@@ -142,6 +158,15 @@ class RunRegistry:
         handle = RunHandle(run_id=resolved)
         self._runs[resolved] = handle
         return handle
+
+    def remember(self, run_id: str, record: RunRecord) -> None:
+        """Keep the newest runs addressable for report rendering."""
+        self._history[run_id] = record
+        while len(self._history) > MAX_RUN_HISTORY:
+            self._history.pop(next(iter(self._history)))
+
+    def remembered(self, run_id: str) -> RunRecord | None:
+        return self._history.get(run_id)
 
     def finish(self, handle: RunHandle) -> None:
         self._runs.pop(handle.run_id, None)
@@ -478,6 +503,14 @@ def create_app(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"session {session_id} is busy",
             )
+        registry.remember(
+            handle.run_id,
+            RunRecord(
+                session_id=session_id,
+                workspace=request.workspace,
+                principal=identity.principal,
+            ),
+        )
         return handle, session_id
 
     def _context(handle: RunHandle, session_id: UUID, identity: Identity) -> RunContext:
@@ -550,6 +583,66 @@ def create_app(
         finally:
             gate.release(session_id)
             registry.finish(handle)
+
+    @app.get("/v1/runs/{run_id}/report")
+    async def run_report(
+        run_id: str,
+        identity: Annotated[Identity, Depends(_authorize)],
+    ) -> Response:
+        """Render the persisted session of a finished run as Markdown."""
+        if session_store is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="report requires BALE_HTTP_SESSION_DB",
+            )
+        record = registry.remembered(run_id)
+        if record is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"unknown run: {run_id}",
+            )
+        if record.principal != identity.principal:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="run belongs to another principal",
+            )
+
+        await session_store.init()
+        turns = await session_store.list_turns(record.session_id)
+        executed = {
+            turn.turn_id: await session_store.load_executed(turn.turn_id)
+            for turn in turns
+        }
+        memory = await session_store.load_memory(record.session_id)
+        trace = []
+        if resolved.trace_path:
+            trace = [
+                event
+                for event in read_trace(resolved.trace_path)
+                if event.session_id == record.session_id
+            ]
+        markdown = build_report(
+            session_id=record.session_id,
+            workspace=record.workspace,
+            turns=turns,
+            executed=executed,
+            trace=trace,
+            memory=memory,
+        )
+        await audit.record(
+            "report_rendered",
+            principal=identity.principal,
+            run_id=run_id,
+            session_id=str(record.session_id),
+        )
+        return Response(
+            content=markdown,
+            media_type="text/markdown; charset=utf-8",
+            headers={
+                "X-Run-Id": run_id,
+                "X-Session-Id": str(record.session_id),
+            },
+        )
 
     @app.post("/v1/runs/stream")
     async def stream_turn(
