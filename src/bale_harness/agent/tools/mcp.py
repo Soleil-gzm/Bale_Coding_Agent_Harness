@@ -1,12 +1,13 @@
 """MCP tool adapter.
 
-MCP tools are discovered from stdio servers, wrapped in the same :class:`Tool`
-protocol as built-in tools, and registered through :class:`ToolRegistry`, so
-they share argument validation, approval, timeouts, and error normalization.
+MCP tools are discovered from stdio, streamable HTTP, or SSE servers, wrapped
+in the same :class:`Tool` protocol as built-in tools, and registered through
+:class:`ToolRegistry`, so they share argument validation, approval, timeouts,
+and error normalization.
 
 MCP tools default to ``side_effect="write"`` because arbitrary servers may
 mutate external state; a server must opt in with ``read_only=true`` to run
-without approval. Only the stdio transport is supported.
+without approval.
 """
 
 import json
@@ -15,13 +16,16 @@ import time
 from collections.abc import AsyncIterator, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, Self
+from urllib.parse import urlparse
 
 from mcp import ClientSession, StdioServerParameters
+from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
+from mcp.client.streamable_http import streamablehttp_client
 from mcp.types import CallToolResult
 from mcp.types import Tool as McpToolDefinition
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from bale_harness.agent.messages import ToolSpec
 from bale_harness.agent.tools.common import (
@@ -42,17 +46,49 @@ class McpConfigError(ValueError):
 
 
 class McpServerConfig(BaseModel):
-    """One stdio MCP server and its tool-governance defaults."""
+    """One MCP server and its tool-governance defaults.
+
+    ``stdio`` servers spawn ``command``. ``http`` (streamable HTTP) and ``sse``
+    servers connect to ``url`` with optional ``headers``, for example a bearer
+    token for a remote deployment.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(pattern=_NAME_PATTERN.pattern)
-    command: str = Field(min_length=1)
+    transport: Literal["stdio", "http", "sse"] = "stdio"
+    command: str | None = None
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] | None = None
     cwd: Path | None = None
+    url: str | None = None
+    headers: dict[str, str] | None = None
     read_only: bool = False
     timeout_ms: int = Field(default=DEFAULT_TIMEOUT_MS, ge=1)
+
+    @model_validator(mode="after")
+    def validate_transport_fields(self) -> Self:
+        if self.transport == "stdio":
+            if not (self.command or "").strip():
+                raise ValueError("command is required for stdio MCP servers")
+            if self.url is not None or self.headers is not None:
+                raise ValueError("url and headers are only valid for http/sse servers")
+            return self
+        if (
+            self.command is not None
+            or self.args
+            or self.env is not None
+            or self.cwd is not None
+        ):
+            raise ValueError(
+                f"command/args/env/cwd are only valid for stdio MCP servers, "
+                f"not {self.transport}"
+            )
+        if not (self.url or "").strip():
+            raise ValueError(f"url is required for {self.transport} MCP servers")
+        if urlparse(self.url or "").scheme not in {"http", "https"}:
+            raise ValueError("url must use http or https")
+        return self
 
 
 class McpConfigFile(BaseModel):
@@ -182,35 +218,53 @@ async def _list_tools(session: ClientSession) -> list[McpToolDefinition]:
             return definitions
 
 
-@asynccontextmanager
-async def connect_mcp_server(config: McpServerConfig) -> AsyncIterator[list[McpTool]]:
-    """Start one stdio server and yield its adapted tools."""
-    parameters = StdioServerParameters(
+def _stdio_parameters(config: McpServerConfig) -> StdioServerParameters:
+    assert config.command is not None  # guaranteed by config validation
+    return StdioServerParameters(
         command=config.command,
         args=list(config.args),
         env=config.env,
         cwd=str(config.cwd) if config.cwd is not None else None,
     )
-    async with stdio_client(parameters) as (read_stream, write_stream):
+
+
+@asynccontextmanager
+async def _open_session(config: McpServerConfig) -> AsyncIterator[ClientSession]:
+    """Open an initialized MCP session for the configured transport."""
+    if config.transport == "stdio":
+        streams = stdio_client(_stdio_parameters(config))
+    elif config.transport == "http":
+        assert config.url is not None  # guaranteed by config validation
+        streams = streamablehttp_client(config.url, headers=config.headers)
+    else:
+        assert config.url is not None  # guaranteed by config validation
+        streams = sse_client(config.url, headers=config.headers)
+    async with streams as opened:
+        read_stream, write_stream = opened[0], opened[1]
         async with ClientSession(read_stream, write_stream) as session:
             await session.initialize()
-            definitions = await _list_tools(session)
-            tools = [
-                McpTool(
-                    config.name,
-                    definition,
-                    session,
-                    read_only=config.read_only,
-                    timeout_ms=config.timeout_ms,
-                )
-                for definition in definitions
-            ]
-            names = [tool.spec.name for tool in tools]
-            if len(set(names)) != len(names):
-                raise ValueError(
-                    f"MCP server {config.name!r} exposes duplicate tool names"
-                )
-            yield tools
+            yield session
+
+
+@asynccontextmanager
+async def connect_mcp_server(config: McpServerConfig) -> AsyncIterator[list[McpTool]]:
+    """Connect one MCP server and yield its adapted tools."""
+    async with _open_session(config) as session:
+        definitions = await _list_tools(session)
+        tools = [
+            McpTool(
+                config.name,
+                definition,
+                session,
+                read_only=config.read_only,
+                timeout_ms=config.timeout_ms,
+            )
+            for definition in definitions
+        ]
+        names = [tool.spec.name for tool in tools]
+        if len(set(names)) != len(names):
+            raise ValueError(f"MCP server {config.name!r} exposes duplicate tool names")
+        yield tools
 
 
 @asynccontextmanager
