@@ -97,6 +97,50 @@ def test_cost_settings_reject_negative_values() -> None:
         Settings(_env_file=None, input_cost_per_1k=-1)
 
 
+def test_sandbox_settings_default_to_local() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.sandbox_backend == "local"
+    assert settings.sandbox_image == "python:3.11-slim"
+    assert settings.sandbox_network is False
+    assert settings.sandbox_memory == "1g"
+    assert settings.sandbox_cpus == pytest.approx(1.0)
+    assert settings.sandbox_pids_limit == 256
+    assert settings.sandbox_user == "10001:10001"
+
+
+def test_sandbox_settings_read_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BALE_SANDBOX_BACKEND", "docker")
+    monkeypatch.setenv("BALE_SANDBOX_IMAGE", "example/sandbox:latest")
+    monkeypatch.setenv("BALE_SANDBOX_NETWORK", "true")
+    monkeypatch.setenv("BALE_SANDBOX_MEMORY", "512m")
+    monkeypatch.setenv("BALE_SANDBOX_CPUS", "0.5")
+    monkeypatch.setenv("BALE_SANDBOX_PIDS_LIMIT", "64")
+    monkeypatch.setenv("BALE_SANDBOX_USER", "0:0")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.sandbox_backend == "docker"
+    assert settings.sandbox_image == "example/sandbox:latest"
+    assert settings.sandbox_network is True
+    assert settings.sandbox_memory == "512m"
+    assert settings.sandbox_cpus == pytest.approx(0.5)
+    assert settings.sandbox_pids_limit == 64
+    assert settings.sandbox_user == "0:0"
+
+
+def test_sandbox_backend_rejects_unknown_value() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, sandbox_backend="firecracker")
+
+
+def test_sandbox_limits_reject_invalid_values() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, sandbox_cpus=0)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, sandbox_pids_limit=1)
+
+
 def test_openai_api_key_is_not_exposed_in_repr() -> None:
     secret = "sk-test-sensitive-value"
 

@@ -11,10 +11,13 @@ container or virtual machine; the Docker adapter is a later milestone.
 
 import asyncio
 import os
+import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Protocol
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -100,6 +103,10 @@ class ExecResult(BaseModel):
 class Sandbox(Protocol):
     """Execution contract shared by local and container adapters."""
 
+    @property
+    def python_executable(self) -> str:
+        """Interpreter to use for Python tooling inside this sandbox."""
+
     async def run(
         self,
         command: list[str],
@@ -157,6 +164,10 @@ class LocalSandbox:
         self._guard = guard
         self._env_allowlist = env_allowlist
         self._deny_commands = deny_commands
+
+    @property
+    def python_executable(self) -> str:
+        return sys.executable
 
     def _build_env(self, extra_env: dict[str, str] | None) -> dict[str, str]:
         env = {
@@ -228,3 +239,230 @@ class LocalSandbox:
             duration_ms=_elapsed_ms(start),
             truncated=out_truncated or err_truncated,
         )
+
+
+DEFAULT_DOCKER_IMAGE = "python:3.11-slim"
+DOCKER_WORKSPACE = "/workspace"
+
+
+class DockerSandbox:
+    """Run every command in a fresh, hardened Docker container.
+
+    The workspace is bind-mounted at ``/workspace``. Containers start with no
+    network, a read-only root filesystem, dropped capabilities, a non-root
+    user, and CPU/memory/PID limits. The image defines which tools are
+    available, so select one that contains the project's runtime and test
+    dependencies.
+    """
+
+    def __init__(
+        self,
+        workspace: Path,
+        *,
+        image: str = DEFAULT_DOCKER_IMAGE,
+        network: bool = False,
+        memory: str = "1g",
+        cpus: float = 1.0,
+        pids_limit: int = 256,
+        user: str = "10001:10001",
+        docker_bin: str = "docker",
+    ) -> None:
+        self._guard = WorkspaceGuard(workspace)
+        self._image = image
+        self._network = network
+        self._memory = memory
+        self._cpus = cpus
+        self._pids_limit = pids_limit
+        self._user = user
+        self._docker_bin = docker_bin
+
+    @property
+    def python_executable(self) -> str:
+        return "python"
+
+    def _require_docker(self) -> None:
+        if shutil.which(self._docker_bin) is not None:
+            return
+        if Path(self._docker_bin).is_file():
+            return
+        raise SandboxViolation(
+            f"docker executable not found: {self._docker_bin}; "
+            "install Docker or switch to the local sandbox"
+        )
+
+    def _workdir(self, cwd: str) -> str:
+        try:
+            resolved = self._guard.resolve(cwd)
+        except WorkspaceError as error:
+            raise SandboxViolation(str(error)) from error
+        if not resolved.is_dir():
+            raise SandboxViolation(f"working directory is not a directory: {cwd}")
+        relative = resolved.relative_to(self._guard.root)
+        if relative == Path("."):
+            return DOCKER_WORKSPACE
+        return f"{DOCKER_WORKSPACE}/{relative.as_posix()}"
+
+    def build_command(
+        self,
+        command: list[str],
+        *,
+        cwd: str = ".",
+        extra_env: dict[str, str] | None = None,
+        name: str,
+    ) -> list[str]:
+        """Return the full ``docker run`` argument vector for one command."""
+        argv = [str(part) for part in command]
+        if not argv:
+            raise SandboxViolation("empty command")
+        workdir = self._workdir(cwd)
+        args = [
+            self._docker_bin,
+            "run",
+            "--rm",
+            "--init",
+            "--name",
+            name,
+            "--label",
+            "bale.sandbox=1",
+            "--network",
+            "bridge" if self._network else "none",
+            "--read-only",
+            "--tmpfs",
+            "/tmp:rw,size=64m",
+            "--security-opt",
+            "no-new-privileges",
+            "--cap-drop",
+            "ALL",
+            "--pids-limit",
+            str(self._pids_limit),
+            "--memory",
+            self._memory,
+            "--cpus",
+            f"{self._cpus:g}",
+            "--user",
+            self._user,
+            "-e",
+            "HOME=/tmp",
+            "-e",
+            "BALE_SANDBOX=docker",
+            "-e",
+            "PYTHONUNBUFFERED=1",
+            "-v",
+            f"{self._guard.root}:{DOCKER_WORKSPACE}",
+            "--workdir",
+            workdir,
+        ]
+        for key, value in sorted((extra_env or {}).items()):
+            args.extend(["-e", f"{key}={value}"])
+        args.extend([self._image, *argv])
+        return args
+
+    async def _remove_container(self, name: str) -> None:
+        try:
+            process = await asyncio.create_subprocess_exec(
+                self._docker_bin,
+                "rm",
+                "-f",
+                name,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        except OSError:
+            return
+        try:
+            await asyncio.wait_for(process.wait(), timeout=10)
+        except TimeoutError:
+            process.kill()
+
+    async def run(
+        self,
+        command: list[str],
+        *,
+        cwd: str = ".",
+        timeout_s: float = 120.0,
+        extra_env: dict[str, str] | None = None,
+    ) -> ExecResult:
+        start = time.perf_counter()
+        self._require_docker()
+        name = f"bale-sandbox-{uuid4().hex[:12]}"
+        argv = [str(part) for part in command]
+        docker_argv = self.build_command(argv, cwd=cwd, extra_env=extra_env, name=name)
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *docker_argv,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError as error:
+            raise SandboxViolation(
+                f"docker executable not found: {self._docker_bin}"
+            ) from error
+
+        timed_out = False
+        try:
+            raw_out, raw_err = await asyncio.wait_for(
+                process.communicate(), timeout=timeout_s
+            )
+        except TimeoutError:
+            timed_out = True
+            await self._remove_container(name)
+            if process.returncode is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except TimeoutError:
+                pass
+            raw_out, raw_err = b"", b""
+        except asyncio.CancelledError:
+            await self._remove_container(name)
+            if process.returncode is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+            raise
+
+        stdout, out_truncated = _truncate(raw_out.decode("utf-8", errors="replace"))
+        stderr, err_truncated = _truncate(raw_err.decode("utf-8", errors="replace"))
+        return ExecResult(
+            command=argv,
+            exit_code=None if timed_out else process.returncode,
+            stdout=stdout,
+            stderr=stderr,
+            timed_out=timed_out,
+            duration_ms=_elapsed_ms(start),
+            truncated=out_truncated or err_truncated,
+        )
+
+
+def create_sandbox(
+    backend: str,
+    workspace: Path,
+    *,
+    image: str = DEFAULT_DOCKER_IMAGE,
+    network: bool = False,
+    memory: str = "1g",
+    cpus: float = 1.0,
+    pids_limit: int = 256,
+    user: str = "10001:10001",
+    docker_bin: str = "docker",
+) -> Sandbox:
+    """Build the configured execution sandbox for ``workspace``."""
+    if backend == "local":
+        return LocalSandbox(WorkspaceGuard(workspace))
+    if backend == "docker":
+        return DockerSandbox(
+            workspace,
+            image=image,
+            network=network,
+            memory=memory,
+            cpus=cpus,
+            pids_limit=pids_limit,
+            user=user,
+            docker_bin=docker_bin,
+        )
+    raise ValueError(f"unsupported sandbox backend: {backend}")

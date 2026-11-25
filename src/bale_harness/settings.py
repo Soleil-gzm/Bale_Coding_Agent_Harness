@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     mcp_config: Path | None = None
     retrieval_enabled: bool = True
     retrieval_top_k: int = Field(default=5, ge=1, le=20)
+    sandbox_backend: Literal["local", "docker"] = "local"
+    sandbox_image: str = Field(default="python:3.11-slim", min_length=1)
+    sandbox_network: bool = False
+    sandbox_memory: str = Field(default="1g", min_length=1)
+    sandbox_cpus: float = Field(default=1.0, gt=0)
+    sandbox_pids_limit: int = Field(default=256, ge=16)
+    sandbox_user: str = Field(default="10001:10001", min_length=1)
 
     @model_validator(mode="after")
     def validate_provider_credentials(self) -> Self:

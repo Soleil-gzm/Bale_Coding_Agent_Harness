@@ -7,7 +7,6 @@ with paths or spaces should use the list form.
 """
 
 import shlex
-import sys
 import time
 from typing import Any
 
@@ -189,7 +188,7 @@ class RunTestsTool(BaseTool):
         extra = list(arguments.get("args", []))
         timeout_s = float(arguments.get("timeout_s", 240))
         argv = [
-            sys.executable,
+            self._sandbox.python_executable,
             "-m",
             "pytest",
             "-q",

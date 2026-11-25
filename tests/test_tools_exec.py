@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from bale_harness.agent.sandbox import LocalSandbox
+from bale_harness.agent.sandbox import ExecResult, LocalSandbox
 from bale_harness.agent.security import WorkspaceGuard
 from bale_harness.agent.tools.exec import RunTestsTool, ShellTool, split_command
 
@@ -112,3 +112,24 @@ def test_run_tests_reports_no_tests(tmp_path: Path) -> None:
 
     assert result.status == "error"
     assert result.error_code == "no_tests"
+
+
+class _RecordingSandbox:
+    python_executable = "python-in-container"
+
+    def __init__(self) -> None:
+        self.command: list[str] | None = None
+
+    async def run(self, command: list[str], **_: Any) -> ExecResult:
+        self.command = command
+        return ExecResult(command=command, exit_code=0, stdout="ok")
+
+
+def test_run_tests_uses_the_sandbox_python() -> None:
+    sandbox = _RecordingSandbox()
+
+    result = _run(RunTestsTool(sandbox), {"path": "."})
+
+    assert result.status == "success"
+    assert sandbox.command is not None
+    assert sandbox.command[0] == "python-in-container"
