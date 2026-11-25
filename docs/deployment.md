@@ -90,6 +90,8 @@ docker compose up -d --force-recreate
 - `BALE_HTTP_API_KEY` 必须是非空值；设置为空字符串会要求空 Bearer，等同于配置错误。
 - `.env` 中的相对路径按**容器内**解析。`BALE_MCP_CONFIG=examples/mcp/servers.json` 在容器里不存在，必须挂载后改成 `/config/...`。
 - 使用宿主机 Ollama 时，`BALE_OPENAI_BASE_URL` 要写 `http://host.docker.internal:11434/v1`，不能写 `127.0.0.1`，因为容器内的回环是容器自己。
+- `host.docker.internal` 不属于配置校验认可的回环地址，因此 `BALE_OPENAI_API_KEY` 必须填一个非空占位值（例如 `ollama`），否则应用启动时报 Key 缺失。
+- 宿主机 Ollama 需要监听容器可达的地址，启动前设置 `OLLAMA_HOST=0.0.0.0` 并重启 Ollama；否则 `host.docker.internal:11434` 仍会连接失败。
 
 完整变量与校验规则见[配置参考](configuration.md)。
 
