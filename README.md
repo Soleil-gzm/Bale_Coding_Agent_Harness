@@ -92,11 +92,11 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 
 ### MCP 工具接入
 
-- `bale run --mcp-config examples/mcp/servers.json` 读取 JSON 配置，启动 stdio MCP 服务、初始化会话并分页拉取工具。
+- `bale run --mcp-config examples/mcp/servers.json` 读取 JSON 配置，连接 MCP 服务、初始化会话并分页拉取工具；`transport` 支持 `stdio`（默认）、`http`（streamable HTTP）与 `sse`。
 - `bale chat --mcp-config ...` 在整个交互期间复用同一 MCP 会话；HTTP 通过 `BALE_MCP_CONFIG` 在应用 lifespan 内挂载，配置损坏时启动失败。
 - 每个 MCP 工具被适配为 `mcp_<server>_<tool>`，与内置工具共享参数校验、审批、超时和错误归一化。
 - MCP 工具默认按写副作用处理，需要审批或 `--yes`；服务器声明 `read_only=true` 后才作为只读工具参与并行执行。
-- 配置项包括 `name`、`command`、`args`、`env`、`cwd`、`read_only` 和 `timeout_ms`；相对 `cwd` 以配置文件所在目录为基准。
+- stdio 配置项包括 `name`、`command`、`args`、`env`、`cwd`、`read_only` 和 `timeout_ms`，相对 `cwd` 以配置文件所在目录为基准；HTTP/SSE 配置项为 `transport`、`url` 与可选 `headers`（例如 Bearer Token），不接受 `command/args/env/cwd`。
 
 ### MCP 文件写入示例
 
@@ -117,7 +117,7 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - Trace 为本地追加 JSONL，无轮转、采样或远程导出；`estimated_cost` 只是按配置费率的估算，不代表 Provider 账单。
 - 运行报告是只读 Markdown 投影，提供 CLI 与 HTTP（`GET /v1/runs/{run_id}/report`）入口，不调用模型、不执行工具，也不包含 HTML/PDF 导出。
 - 检索默认是无第三方依赖的 BM25 词法排序（Python 按顶层定义切块，其余按行窗口），可选叠加 OpenAI 兼容 embedding 的向量召回与按文件签名的增量索引；向量端点不可用时会退回 BM25。评测只执行 JSON 固定任务与文件级断言，可选用 Docker 沙箱执行任务命令，不包含自动生成任务或模型评分。
-- MCP 只支持 stdio transport；`bale run` 每次重建会话，`bale chat` 与 HTTP 入口在各自生命周期内复用一个会话，不包含 SSE/HTTP transport、工具缓存、工具级审批界面或跨进程会话复用。`read_only` 是调用方声明，不代表服务器已被隔离。
+- MCP 支持 stdio、streamable HTTP 与 SSE transport；`bale run` 每次重建会话，`bale chat` 与 HTTP 入口在各自生命周期内复用一个会话，不包含工具缓存、工具级审批界面或跨进程会话复用。HTTP/SSE 只使用配置的 `url` 与 `headers`，不提供重连或服务发现。`read_only` 是调用方声明，不代表服务器已被隔离。
 - HTTP 接口提供 Bearer 认证（多 Key + `read`/`write` scope）、内存限流、SQLite Session、HTTP 审批、JSONL 审计、Markdown 报告端点、`run_id` 指定与协作式取消；没有 TLS、多副本共享状态或按工具/路径的 ACL，`approve_writes=true` 只应由可信调用方使用。
 - 自动检索按用户消息在每次 Turn 注入有限片段，不感知对话历史，也不保证召回完整；检索异常时静默跳过，不阻断 Turn。
 - `bale chat` 的跨 Turn 连续性依赖 Session 记忆摘要，不携带完整历史，也不会自动压缩超长对话。
@@ -142,7 +142,7 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 | 观测 | JsonlTraceExporter、CostRates | 追加式 JSONL 事件与可选成本估算 |
 | 报告 | build_report、bale report | 从 Session/Trace 生成只读 Markdown |
 | 检索与评测 | Bm25Index、HybridIndex、Bm25Retriever、EvalTask/EvalReport | 标准库 BM25、可选 embedding 混合排序、增量 JSON 快照、按 Turn 注入与确定性文件断言 |
-| 工具协议 | Model Context Protocol | MCP 客户端与服务端均使用 `stdio` transport |
+| 工具协议 | Model Context Protocol | MCP 客户端支持 `stdio`、streamable HTTP 与 SSE；示例服务端使用 `stdio` |
 | SDK | `mcp==1.30.0` | 服务端使用 `FastMCP`，运行时使用 `ClientSession` 适配工具 |
 | 测试与检查 | pytest、Ruff、pip-tools | 离线测试、静态检查与哈希锁文件 |
 | 存储 | SQLite、本地文件系统 | Session 使用标准库 `sqlite3`；MCP 示例写入 `output/` |

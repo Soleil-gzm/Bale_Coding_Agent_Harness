@@ -175,7 +175,7 @@ B9 的客户端实现位于 `agent/tools/mcp.py`：`mcp_tools(configs)` 是异�
 
 ## 4. 目标系统分层架构
 
-当前已实现 CLI/HTTP 到 Turn 的构造路径，以及图中的 AgentLoop、ContextBuilder、HistoryTrimmer、ToolRegistry、Approval、Session 与 Checkpoint 的本地版本，并已有本地 JSONL Trace、成本估算、只读 Markdown 报告（CLI 与 HTTP 报告端点）、BM25/向量混合检索与增量索引、评测 harness、stdio MCP Tool Adapter、HTTP Bearer 认证与运行取消、HTTP 审批/限流/审计与 Docker Sandbox，以及按 Turn 的检索注入。知识库 Retriever 与多副本共享状态仍为后续设计，不是当前目录结构或已有能力。
+当前已实现 CLI/HTTP 到 Turn 的构造路径，以及图中的 AgentLoop、ContextBuilder、HistoryTrimmer、ToolRegistry、Approval、Session 与 Checkpoint 的本地版本，并已有本地 JSONL Trace、成本估算、只读 Markdown 报告（CLI 与 HTTP 报告端点）、BM25/向量混合检索与增量索引、评测 harness、stdio/HTTP/SSE MCP Tool Adapter、HTTP Bearer 认证与运行取消、HTTP 审批/限流/审计与 Docker Sandbox，以及按 Turn 的检索注入。知识库 Retriever 与多副本共享状态仍为后续设计，不是当前目录结构或已有能力。
 
 ```mermaid
 flowchart TB
@@ -231,7 +231,7 @@ flowchart TB
 | `agent/history.py` | 按完整 Turn 裁剪并维持消息配对 | 领域消息模型 |
 | `agent/tools/registry.py` | 注册、校验、并发、超时、错误归一化 | Tool 端口、Approval、Trace |
 | `agent/tools/builtin.py` | 读写、检索、测试、Diff 等内置工具 | Sandbox、Workspace |
-| `agent/tools/mcp.py` | MCP list/call、命名空间和生命周期 | MCP SDK、Registry |
+| `agent/tools/mcp.py` | MCP list/call、命名空间和生命周期；stdio、streamable HTTP 与 SSE 连接 | MCP SDK、Registry |
 | `agent/security.py` | 路径、能力、环境变量和不可信数据边界 | Workspace、Approval |
 | `agent/checkpoint.py` | 独立快照、撤销、恢复和幂等 | Git、Session |
 | `sandbox/` | 本地、容器和远程执行适配 | 统一 Sandbox 端口 |
@@ -339,6 +339,7 @@ B3 的实际实现：
 | `asyncio`、Protocol | 统一最小异步 Provider 契约 | FakeProvider 不访问网络 |
 | FastMCP、`mcp==1.30.0` | 用少量代码声明示例工具和 Schema | 不等同于完整 Agent 工具治理 |
 | MCP `stdio` | 本地进程集成简单、无需开放端口 | 客户端必须管理进程生命周期 |
+| MCP `http`/`sse` | 无需本地进程，适合远程或多客户端共享服务 | 依赖网络与远端认证；不做重连，不提供进程级隔离 |
 | pytest、Ruff、pip-tools | 离线测试、静态检查和可复现安装 | 本地通过不等于远程 CI 已运行 |
 | `sqlite3`（标准库） | B3 Session、消息、已执行调用与记忆持久化 | 单机文件数据库，不提供分布式协调 |
 | BM25 + 可选 embedding（标准库实现） | B8 代码检索、混合排序、增量注入与 `search_code` | 向量来自 OpenAI 兼容端点；无第三方向量库，embedding 不可用时退化为纯 BM25 |

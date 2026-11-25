@@ -223,8 +223,9 @@ bale run --workspace "$PWD" --message "写一条 MCP 笔记" \
 
 - CLI 只读取显式的 `--mcp-config`；`BALE_MCP_CONFIG` 仅用于 HTTP 应用启动时加载。
 - `bale chat` 在整个 REPL 期间复用同一 MCP 会话。
-- 服务器配置支持 `name`、`command`、`args`、`env`、`cwd`、`read_only`、`timeout_ms`；相对 `cwd` 以配置文件所在目录为基准。
-- 只支持 stdio transport；`read_only` 是调用方声明，不是隔离保证。
+- stdio 服务器配置支持 `name`、`command`、`args`、`env`、`cwd`、`read_only`、`timeout_ms`；相对 `cwd` 以配置文件所在目录为基准。
+- `transport` 取 `stdio`（默认）、`http`（streamable HTTP）或 `sse`。远程传输使用 `url` 与可选 `headers`，`url` 必须是 `http`/`https`；混用 `command/args/env/cwd` 或遗漏 `url` 会在配置校验阶段失败。
+- `read_only` 是调用方声明，不是隔离保证；HTTP/SSE 的认证与 TLS 由 `url`/`headers` 与远端服务负责，Bale 不做重连。
 
 配置结构与示例见[快速启动 §4.11、§8](quickstart.md)和 [examples/mcp/servers.json](../examples/mcp/servers.json)。
 
@@ -260,7 +261,7 @@ export BALE_EMBEDDING_API_KEY=sk-...
 | `--trace` | `BALE_TRACE_PATH` | 单次运行指定 JSONL 路径 |
 | `--session-db` | 无环境变量 | 启用 SQLite Session；Checkpoint 目录由它派生 |
 | `--checkpoint-dir` | 无环境变量 | 显式指定 ShadowGit 持久化目录 |
-| `--mcp-config` | `BALE_MCP_CONFIG`（仅 HTTP 使用） | 挂载 stdio MCP 服务器 |
+| `--mcp-config` | `BALE_MCP_CONFIG`（仅 HTTP 使用） | 挂载 MCP 服务器（stdio/HTTP/SSE） |
 | `--approval-mode` / `--yes` | 无环境变量 | 控制写与执行审批 |
 | `--shadow-git` / `--no-shadow-git` | 无环境变量 | 默认开启快照 |
 | `--max-iterations`、`--token-budget`、`--time-budget`、`--cost-budget` | 无环境变量 | 单次运行预算；`--time-budget` 单位为秒，必须大于 0 |

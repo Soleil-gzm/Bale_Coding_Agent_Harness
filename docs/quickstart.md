@@ -265,7 +265,7 @@ bale chat \
 - 每行输入生成一个独立 Turn；跨 Turn 连续性来自 Session 的 `after_turn` 记忆摘要，不携带完整历史。
 - `--no-shadow-git` 可关闭快照；传 `--session-db` 时 Checkpoint 会持久化，可直接配合 `bale undo`。
 - 写/执行工具需要审批；非交互环境请使用 `--yes`，否则会被拒绝并回报给模型。
-- `--mcp-config` 可挂载 stdio MCP 工具，会话在整个 REPL 期间保持；自动检索默认开启，可用 `BALE_RETRIEVAL_ENABLED=false` 关闭。
+- `--mcp-config` 可挂载 stdio/HTTP/SSE MCP 工具，会话在整个 REPL 期间保持；自动检索默认开启，可用 `BALE_RETRIEVAL_ENABLED=false` 关闭。
 
 ### 4.7 检查 Session/Trace 与撤销改动
 
@@ -391,7 +391,7 @@ bale eval \
 
 ### 4.11 MCP 工具接入
 
-`bale run` 可通过 JSON 配置启动 stdio MCP 服务并注册其工具：
+`bale run` 可通过 JSON 配置连接 MCP 服务并注册其工具（默认 `stdio`）：
 
 ```bash
 bale run --workspace "$PWD" --message "写一条 MCP 笔记" \
@@ -415,11 +415,29 @@ bale run --workspace "$PWD" --message "写一条 MCP 笔记" \
 }
 ```
 
+远程服务器使用 `transport`、`url` 与可选 `headers`：
+
+```json
+{
+  "servers": [
+    {
+      "name": "remote",
+      "transport": "http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": {"Authorization": "Bearer <token>"},
+      "read_only": true
+    }
+  ]
+}
+```
+
 - `command`/`args`/`env` 用于启动子进程，相对 `cwd` 以配置文件所在目录解析。
+- `transport` 取 `stdio`（默认）、`http`（streamable HTTP）或 `sse`；远程传输只接受 `url`/`headers`，混用 `command/args/env/cwd` 或 `url` 不是 `http(s)` 时配置校验失败。
 - 每个工具对模型暴露为 `mcp_<server>_<tool>`；参数 schema 来自 MCP `inputSchema`，必填参数在本地先校验。
 - 工具默认按写副作用处理，必须审批或加 `--yes`；`read_only=true` 适合只读服务器，并允许并行批次。
 - MCP 协议错误返回 `mcp_error`，工具自身 `isError` 返回 `mcp_tool_error`；两者都会进入 `ToolResult`，不会中断循环。
-- 每次 `bale run` 重新建立会话，运行结束后关闭子进程；`bale chat --mcp-config` 在整个交互期间复用同一会话，HTTP 入口通过 `BALE_MCP_CONFIG` 在应用 lifespan 内启动并复用，配置损坏时启动失败。
+- 每次 `bale run` 重新建立会话，运行结束后关闭连接；`bale chat --mcp-config` 在整个交互期间复用同一会话，HTTP 入口通过 `BALE_MCP_CONFIG` 在应用 lifespan 内启动并复用，配置损坏时启动失败。
+- HTTP/SSE 不做重连或服务发现；认证与 TLS 由 `url`/`headers` 和远端服务负责。
 - 手动验证最小服务端仍可使用第 6、7 节。
 
 ## 5. 使用 HTTP 创建与执行 Turn

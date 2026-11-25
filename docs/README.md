@@ -1,6 +1,6 @@
 # Bale 文档索引
 
-Bale Coding Agent Harness 是一个本地优先的 Coding Agent 运行时与工程脚手架：CLI/HTTP 入口、ReAct 循环、工具治理、本地/Docker 执行沙箱、Session/恢复、ShadowGit 快照、Trace/成本、BM25 与可选向量混合检索、评测 harness 与 stdio MCP 适配。
+Bale Coding Agent Harness 是一个本地优先的 Coding Agent 运行时与工程脚手架：CLI/HTTP 入口、ReAct 循环、工具治理、本地/Docker 执行沙箱、Session/恢复、ShadowGit 快照、Trace/成本、BM25 与可选向量混合检索、评测 harness 与 stdio/HTTP/SSE MCP 适配。
 
 文档按「先跑起来 → 理解边界 → 排错与评测」组织。命令默认在仓库根目录执行，Python 为 3.11+。
 

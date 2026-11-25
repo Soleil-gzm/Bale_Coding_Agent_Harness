@@ -208,8 +208,10 @@ bale run --workspace . --message "hello" --mcp-config servers.json --yes
 
 - 先按 [快速启动 §10](quickstart.md#10-常见问题排查) 检查解释器、`mcp` 版本与服务端 stderr。
 - `mcp_error`：启动/初始化/协议层失败；`mcp_tool_error`：服务端返回 `isError=true`。后者通常是工具业务失败，不是连接断开。
+- `transport: http/sse` 连接失败也表现为 `mcp_error`。检查 `url` 是否以 `http(s)` 开头、`headers` 是否正确，以及远端服务是否可达；Bale 不会在失败后退回 stdio 或自动重连。
+- 远程配置不能同时提供 `command/args/env/cwd`，否则会在加载阶段报 `only valid for stdio`；本地配置提供 `url/headers` 会报 `only valid for http/sse`。
 - `read_only` 只是调用方声明：声明为只读的工具才会与其他只读工具并行执行；它**不会**隔离服务器权限。
-- `bale chat` 与 HTTP 入口在各自生命周期内复用会话；`bale run` 每次重建。服务端日志写到 stderr，避免污染 stdout 的 JSON-RPC 通道。
+- `bale chat` 与 HTTP 入口在各自生命周期内复用会话；`bale run` 每次重建。stdio 服务端日志写到 stderr，避免污染 stdout 的 JSON-RPC 通道。
 
 ## 检索与评测
 
