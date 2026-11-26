@@ -139,3 +139,74 @@ def test_load_suite_rejects_missing_metadata(tmp_path: Path) -> None:
 
     with pytest.raises(EvalTaskError):
         load_suite(path)
+
+
+def test_v2_budget_nested_parses(tmp_path: Path) -> None:
+    task = _v2_task(
+        budget={"max_iterations": 12, "token_budget": 32768, "time_budget_s": 180}
+    )
+    path = _write(tmp_path / "tasks.json", {"schema_version": 2, "tasks": [task]})
+
+    loaded = load_tasks(path)
+
+    assert loaded[0].budget.max_iterations == 12
+    assert loaded[0].budget.token_budget == 32768
+    assert loaded[0].budget.time_budget_s == 180
+
+
+def test_v2_budget_defaults_match_e1(tmp_path: Path) -> None:
+    path = _write(tmp_path / "tasks.json", {"schema_version": 2, "tasks": [_v2_task()]})
+
+    loaded = load_tasks(path)
+
+    assert loaded[0].budget.max_iterations == 8
+    assert loaded[0].budget.token_budget == 128_000
+    assert loaded[0].budget.time_budget_s is None
+
+
+def test_v2_flat_budget_rejected(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "tasks.json",
+        {"schema_version": 2, "tasks": [_v2_task(max_iterations=12)]},
+    )
+
+    with pytest.raises(EvalTaskError):
+        load_tasks(path)
+
+
+def test_v2_forbidden_side_effects_accepts_known_values(tmp_path: Path) -> None:
+    task = _v2_task(
+        integrity={
+            "forbidden_side_effects": ["network", "git_push", "workspace_escape"]
+        }
+    )
+    path = _write(tmp_path / "tasks.json", {"schema_version": 2, "tasks": [task]})
+
+    loaded = load_tasks(path)
+
+    assert loaded[0].integrity.forbidden_side_effects == [
+        "network",
+        "git_push",
+        "workspace_escape",
+    ]
+
+
+def test_v2_forbidden_side_effects_rejects_unknown(tmp_path: Path) -> None:
+    task = _v2_task(integrity={"forbidden_side_effects": ["foo"]})
+    path = _write(tmp_path / "tasks.json", {"schema_version": 2, "tasks": [task]})
+
+    with pytest.raises(EvalTaskError):
+        load_tasks(path)
+
+
+def test_v2_tool_contracts_parse(tmp_path: Path) -> None:
+    task = _v2_task(
+        required_tools=["write_file"],
+        forbidden_tools=["http_request"],
+    )
+    path = _write(tmp_path / "tasks.json", {"schema_version": 2, "tasks": [task]})
+
+    loaded = load_tasks(path)
+
+    assert loaded[0].required_tools == ["write_file"]
+    assert loaded[0].forbidden_tools == ["http_request"]

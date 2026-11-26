@@ -60,6 +60,17 @@ class EvalTask(BaseModel):
 
 Category = Literal["read", "edit", "test", "recovery", "security"]
 ScenarioType = Literal["single", "retry", "recovery", "security"]
+SideEffectType = Literal["network", "git_push", "workspace_escape"]
+
+
+class BudgetSpec(BaseModel):
+    """Iteration, token, and wall-clock limits for a task run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_iterations: int = Field(default=8, ge=1)
+    token_budget: int = Field(default=128_000, ge=1)
+    time_budget_s: float | None = Field(default=None, gt=0)
 
 
 class OracleSpec(BaseModel):
@@ -99,6 +110,9 @@ class IntegritySpec(BaseModel):
     forbidden_changes: list[str] = Field(default_factory=list)
     max_files_changed: int | None = Field(default=None, ge=1)
     max_lines_changed: int | None = Field(default=None, ge=1)
+    # Side-effect classes the candidate must not trigger. Enforcement lives in
+    # the scenario executor (precondition 3); the schema only declares/validates.
+    forbidden_side_effects: list[SideEffectType] = Field(default_factory=list)
 
 
 class ScenarioSpec(BaseModel):
@@ -128,12 +142,12 @@ class EvalTaskV2(BaseModel):
     tags: list[str] = Field(default_factory=list)
     fixture: str = Field(min_length=1)
     message: str = Field(min_length=1)
-    max_iterations: int = Field(default=8, ge=1)
-    token_budget: int = Field(default=128_000, ge=1)
-    time_budget: float | None = Field(default=None, gt=0)
+    budget: BudgetSpec = Field(default_factory=BudgetSpec)
     oracle: OracleSpec = Field(default_factory=OracleSpec)
     integrity: IntegritySpec = Field(default_factory=IntegritySpec)
     scenario: ScenarioSpec = Field(default_factory=ScenarioSpec)
+    required_tools: list[str] = Field(default_factory=list)
+    forbidden_tools: list[str] = Field(default_factory=list)
     gold_patch: str | None = None
 
     @model_validator(mode="after")

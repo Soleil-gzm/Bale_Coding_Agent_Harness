@@ -24,6 +24,7 @@ from bale_harness.eval.runner import (
     run_tasks,
 )
 from bale_harness.eval.task import (
+    BudgetSpec,
     Check,
     EvalTask,
     EvalTaskError,
@@ -39,6 +40,7 @@ from bale_harness.eval.task import (
 )
 
 __all__ = [
+    "BudgetSpec",
     "Check",
     "CheckResult",
     "EvalReport",

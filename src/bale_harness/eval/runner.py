@@ -375,9 +375,9 @@ async def _run_v2_task(
         turn = Turn(
             message=task.message,
             workspace=workspace,
-            token_budget=task.token_budget,
-            max_iterations=task.max_iterations,
-            time_budget=task.time_budget,
+            token_budget=task.budget.token_budget,
+            max_iterations=task.budget.max_iterations,
+            time_budget=task.budget.time_budget_s,
         )
         result = await loop.run(turn)
 
