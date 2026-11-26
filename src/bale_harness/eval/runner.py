@@ -385,6 +385,9 @@ async def _run_v2_task(
             error = scenario_result.error or (
                 f"run status {scenario_result.run_status}"
             )
+        elif scenario_result.contract_violations:
+            status = "failed"
+            error = "; ".join(scenario_result.contract_violations)
         elif not integrity_result.ok:
             status = "failed"
             error = f"{len(integrity_result.violations)} integrity violation(s)"
