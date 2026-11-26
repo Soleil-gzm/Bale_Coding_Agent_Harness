@@ -5,6 +5,7 @@ from bale_harness.eval.integrity import (
     check_integrity,
     snapshot,
 )
+from bale_harness.eval.interrupt import InterruptController, InterruptSpec
 from bale_harness.eval.oracle import (
     OracleError,
     OracleEvaluation,
@@ -49,6 +50,8 @@ __all__ = [
     "EvalTaskV2",
     "IntegrityResult",
     "IntegritySpec",
+    "InterruptController",
+    "InterruptSpec",
     "OracleError",
     "OracleEvaluation",
     "OracleGroupResult",

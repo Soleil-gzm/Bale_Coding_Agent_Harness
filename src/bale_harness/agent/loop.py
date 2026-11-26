@@ -47,7 +47,7 @@ from bale_harness.agent.session import SessionError, SessionStore, TurnRecord
 from bale_harness.agent.tools import build_default_tools
 from bale_harness.agent.tools.exec import build_exec_tools
 from bale_harness.agent.tools.git import build_git_tools
-from bale_harness.agent.tools.registry import Tool, ToolRegistry
+from bale_harness.agent.tools.registry import InterruptHook, Tool, ToolRegistry
 from bale_harness.agent.tools.write import build_write_tools
 from bale_harness.agent.trace import TraceExporter
 from bale_harness.contracts import ApprovalMode, Turn
@@ -117,6 +117,7 @@ class AgentLoop:
         tracer: TraceExporter | None = None,
         cost_rates: CostRates | None = None,
         retriever: Retriever | None = None,
+        interrupt_hook: InterruptHook | None = None,
     ) -> None:
         self._provider = provider
         self._registry = registry
@@ -126,6 +127,7 @@ class AgentLoop:
         self._tracer = tracer
         self._cost_rates = cost_rates
         self._retriever = retriever
+        self._interrupt_hook = interrupt_hook
         self._run_started: float | None = None
 
     async def run(
@@ -184,6 +186,8 @@ class AgentLoop:
             )
 
             for _ in range(turn.max_iterations):
+                if self._interrupt_hook is not None:
+                    await self._interrupt_hook.on_iteration_start()
                 if cancelled is not None and cancelled.is_set():
                     await self._persist_status(
                         turn,
@@ -323,6 +327,44 @@ class AgentLoop:
 
                 results = await self._registry.execute_batch(calls)
                 tool_calls += len(calls)
+                # When an interrupt hook is wired, a side-effect hook may have
+                # signalled cancellation mid-batch. Exit before persisting so the
+                # interrupted call stays pending (result-unknown). Without a hook
+                # the original iteration-boundary cancellation is preserved.
+                if (
+                    self._interrupt_hook is not None
+                    and cancelled is not None
+                    and cancelled.is_set()
+                ):
+                    await self._persist_status(
+                        turn,
+                        "cancelled",
+                        error="cancelled",
+                        iterations=iterations,
+                        tool_calls=tool_calls,
+                        usage=total_usage,
+                    )
+                    await self._trace_finished(
+                        turn,
+                        status="cancelled",
+                        error="cancelled",
+                        iterations=iterations,
+                        tool_calls=tool_calls,
+                        usage=total_usage,
+                    )
+                    return RunResult(
+                        turn_id=turn.turn_id,
+                        status="cancelled",
+                        iterations=iterations,
+                        tool_calls=tool_calls,
+                        usage=total_usage,
+                        error="cancelled",
+                        checkpoints=checkpoints,
+                        session_id=self._session_id(turn),
+                        resumed=resumed,
+                        duration_ms=self._elapsed_ms(),
+                        estimated_cost=self._cost(total_usage),
+                    )
                 for call, result in zip(calls, results, strict=True):
                     await self._emit(
                         "tool_call",
@@ -737,6 +779,7 @@ def build_default_loop(
     search_embedder: Embedder | None = None,
     search_alpha: float = 0.5,
     search_index_path: Path | None = None,
+    interrupt_hook: InterruptHook | None = None,
 ) -> AgentLoop:
     """Construct a loop wired to the workspace tools.
 
@@ -754,7 +797,7 @@ def build_default_loop(
         policy: Approver = approver  # type: ignore[assignment]
     else:
         policy = PolicyApprover(approval_mode, approver)  # type: ignore[arg-type]
-    registry = ToolRegistry(policy)
+    registry = ToolRegistry(policy, interrupt_hook=interrupt_hook)
     tools: list[Tool] = [
         *build_default_tools(
             guard,
@@ -778,4 +821,5 @@ def build_default_loop(
         tracer=tracer,
         cost_rates=cost_rates,
         retriever=retriever,
+        interrupt_hook=interrupt_hook,
     )

@@ -49,12 +49,39 @@ def _elapsed_ms(start: float) -> int:
     return max(0, int((time.perf_counter() - start) * 1000))
 
 
+class InterruptHook(Protocol):
+    """Optional observer that can cancel a run at precise execution points.
+
+    Used by evaluation harnesses to reproduce recovery scenarios
+    (interrupt-before-write, interrupt-after-write-before-persist). Every
+    method is a no-op when no hook is wired.
+    """
+
+    async def on_iteration_start(self) -> None:
+        """Called at the top of each iteration, before the model is prompted."""
+
+    async def before_side_effect(self, call: ToolCall) -> bool:
+        """Called before a side-effect tool executes.
+
+        Return ``True`` to block this execution (the call is reported as
+        interrupted and the tool does not run).
+        """
+
+    async def after_side_effect(self, call: ToolCall, result: ToolResult) -> None:
+        """Called after a side-effect tool executes and before it is cached."""
+
+
 class ToolRegistry:
     """Register tools and dispatch calls with governance applied."""
 
-    def __init__(self, approver: Approver | None = None) -> None:
+    def __init__(
+        self,
+        approver: Approver | None = None,
+        interrupt_hook: InterruptHook | None = None,
+    ) -> None:
         self._tools: dict[str, Tool] = {}
         self._approver = approver
+        self._interrupt_hook = interrupt_hook
         self._executed: dict[tuple[str, str, str], ToolResult] = {}
 
     def register(self, tool: Tool) -> None:
@@ -117,6 +144,18 @@ class ToolRegistry:
                     latency_ms=_elapsed_ms(start),
                 )
 
+            if self._interrupt_hook is not None and (
+                await self._interrupt_hook.before_side_effect(call)
+            ):
+                return ToolResult(
+                    call_id=call.call_id,
+                    name=call.name,
+                    status="error",
+                    content=f"interrupted before execution: {call.name}",
+                    error_code="interrupted",
+                    latency_ms=_elapsed_ms(start),
+                )
+
         timeout_s = tool.spec.timeout_ms / 1000
         try:
             result = await asyncio.wait_for(
@@ -144,6 +183,8 @@ class ToolRegistry:
         if result.call_id != call.call_id:
             result = result.model_copy(update={"call_id": call.call_id})
         if has_side_effects:
+            if self._interrupt_hook is not None:
+                await self._interrupt_hook.after_side_effect(call, result)
             self._executed[self._cache_key(call)] = result
         return result
 
