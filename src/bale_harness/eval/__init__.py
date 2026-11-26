@@ -24,6 +24,7 @@ from bale_harness.eval.runner import (
     run_task,
     run_tasks,
 )
+from bale_harness.eval.scenarios import ScenarioResult, run_scenario
 from bale_harness.eval.task import (
     BudgetSpec,
     Check,
@@ -57,6 +58,7 @@ __all__ = [
     "OracleGroupResult",
     "OracleSpec",
     "PreflightResult",
+    "ScenarioResult",
     "ScenarioSpec",
     "SuiteManifest",
     "TaskOutcome",
@@ -70,6 +72,7 @@ __all__ = [
     "load_tasks",
     "render_markdown",
     "resolve_task_file",
+    "run_scenario",
     "run_task",
     "run_tasks",
     "snapshot",

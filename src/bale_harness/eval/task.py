@@ -11,6 +11,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from bale_harness.eval.interrupt import InterruptSpec
+
 CheckType = Literal[
     "file_exists",
     "file_not_exists",
@@ -116,11 +118,16 @@ class IntegritySpec(BaseModel):
 
 
 class ScenarioSpec(BaseModel):
-    """How the task is executed. Only ``single`` is implemented in E1."""
+    """How the task is executed.
+
+    ``single`` is the baseline; ``interrupt`` configures an injected
+    interruption point for recovery scenarios.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     type: ScenarioType = "single"
+    interrupt: InterruptSpec | None = None
 
 
 def _validate_fixture_path(fixture: str) -> None:

@@ -31,6 +31,7 @@ from bale_harness.agent.security import WorkspaceError, WorkspaceGuard
 from bale_harness.contracts import Turn
 from bale_harness.eval.integrity import IntegrityResult, check_integrity
 from bale_harness.eval.oracle import OracleEvaluation, build_eval_env, evaluate_oracle
+from bale_harness.eval.scenarios import run_scenario
 from bale_harness.eval.task import Check, EvalTask, EvalTaskV2, fixture_directory
 from bale_harness.providers import FakeProvider, ModelProvider
 
@@ -366,20 +367,7 @@ async def _run_v2_task(
         _copy_tree(fixture, workspace)
         env = build_eval_env()
 
-        loop = build_default_loop(
-            provider,
-            workspace,
-            approver=auto_approve,
-            sandbox=sandbox_factory(workspace) if sandbox_factory else None,
-        )
-        turn = Turn(
-            message=task.message,
-            workspace=workspace,
-            token_budget=task.budget.token_budget,
-            max_iterations=task.budget.max_iterations,
-            time_budget=task.budget.time_budget_s,
-        )
-        result = await loop.run(turn)
+        scenario_result = await run_scenario(task, workspace, provider, sandbox_factory)
 
         integrity_result = check_integrity(pristine, workspace, task.integrity)
         integrity_outcome = _to_integrity_outcome(integrity_result)
@@ -392,9 +380,11 @@ async def _run_v2_task(
         oracle_outcome = _to_oracle_outcome(oracle_eval)
 
         failed_checks = [item for item in check_results if not item.passed]
-        if result.status != "completed":
+        if scenario_result.run_status != "completed":
             status: OutcomeStatus = "failed"
-            error = result.error or f"run status {result.status}"
+            error = scenario_result.error or (
+                f"run status {scenario_result.run_status}"
+            )
         elif not integrity_result.ok:
             status = "failed"
             error = f"{len(integrity_result.violations)} integrity violation(s)"
@@ -415,12 +405,12 @@ async def _run_v2_task(
             task_id=task.id,
             description=task.description,
             status=status,
-            run_status=result.status,
-            answer=result.answer,
+            run_status=scenario_result.run_status,
+            answer=scenario_result.answer,
             error=error,
-            iterations=result.iterations,
-            tool_calls=result.tool_calls,
-            total_tokens=result.usage.total_tokens,
+            iterations=scenario_result.iterations,
+            tool_calls=scenario_result.tool_calls,
+            total_tokens=scenario_result.total_tokens,
             duration_ms=_elapsed_ms(started),
             check_results=check_results,
             oracle=oracle_outcome,
