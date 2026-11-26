@@ -5,6 +5,13 @@ from bale_harness.eval.integrity import (
     check_integrity,
     snapshot,
 )
+from bale_harness.eval.oracle import (
+    OracleError,
+    OracleEvaluation,
+    OracleGroupResult,
+    evaluate_oracle,
+    parse_junit,
+)
 from bale_harness.eval.report import render_markdown
 from bale_harness.eval.runner import (
     CheckResult,
@@ -38,12 +45,17 @@ __all__ = [
     "EvalTaskV2",
     "IntegrityResult",
     "IntegritySpec",
+    "OracleError",
+    "OracleEvaluation",
+    "OracleGroupResult",
     "OracleSpec",
     "ScenarioSpec",
     "SuiteManifest",
     "TaskOutcome",
     "check_integrity",
     "evaluate_checks",
+    "evaluate_oracle",
+    "parse_junit",
     "fixture_directory",
     "load_suite",
     "load_tasks",
