@@ -6,7 +6,8 @@ same turn and streams trace events as Server-Sent Events, ending with a
 ``result`` event. ``GET /health`` is public; every ``/v1`` route requires a
 bearer token when ``BALE_HTTP_API_KEY`` or ``BALE_HTTP_API_KEYS`` is set.
 ``POST /v1/runs/{run_id}/cancel`` cooperatively cancels an in-flight run at the
-next iteration boundary. With a session database configured,
+next iteration boundary. ``GET /v1/runs/{run_id}`` returns its current status
+and, once finished, the stored result. With a session database configured,
 ``GET /v1/runs/{run_id}/report`` renders the run's session as Markdown.
 
 With ``BALE_HTTP_APPROVALS=true``, side-effecting tool calls block until a
@@ -30,7 +31,7 @@ import json
 import math
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
@@ -119,6 +120,17 @@ class ApprovalDecision(BaseModel):
     decision: Literal["approve", "deny"]
 
 
+class RunStatusResponse(BaseModel):
+    """Current state and, when available, final outcome of one run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    session_id: UUID
+    status: str
+    result: RunResult | None = None
+
+
 class RunAlreadyActiveError(Exception):
     """Raised when a caller reuses the id of an in-flight run."""
 
@@ -136,11 +148,13 @@ MAX_RUN_HISTORY = 200
 
 @dataclass(frozen=True)
 class RunRecord:
-    """Routing information kept so a finished run can render a report."""
+    """Routing, status, and result retained for one recent run."""
 
     session_id: UUID
     workspace: Path
     principal: str
+    status: str = "running"
+    result: RunResult | None = None
 
 
 class RunRegistry:
@@ -168,7 +182,15 @@ class RunRegistry:
     def remembered(self, run_id: str) -> RunRecord | None:
         return self._history.get(run_id)
 
-    def finish(self, handle: RunHandle) -> None:
+    def finish(self, handle: RunHandle, result: RunResult | None = None) -> None:
+        """Mark a run finished and retain its result for later status queries."""
+        record = self._history.get(handle.run_id)
+        if record is not None:
+            self._history[handle.run_id] = replace(
+                record,
+                status=result.status if result is not None else "failed",
+                result=result,
+            )
         self._runs.pop(handle.run_id, None)
 
     def cancel(self, run_id: str) -> bool:
@@ -380,6 +402,7 @@ def _stream_events(
     async def body() -> AsyncIterator[str]:
         task = asyncio.create_task(_execute(request, context, tracer=tracer))
         task.add_done_callback(lambda _: queue.close_nowait())
+        result: RunResult | None = None
         try:
             announcement: dict[str, str] = {"run_id": handle.run_id}
             if context.session_store is not None:
@@ -410,7 +433,7 @@ def _stream_events(
             yield _sse("error", json.dumps({"error": str(error)}, ensure_ascii=False))
         finally:
             gate.release(context.session_id)
-            registry.finish(handle)
+            registry.finish(handle, result)
 
     return body()
 
@@ -570,6 +593,7 @@ def create_app(
             session_id=str(session_id),
             workspace=str(request.workspace),
         )
+        result: RunResult | None = None
         try:
             result = await _execute(request, context)
             await audit.record(
@@ -591,7 +615,34 @@ def create_app(
             raise
         finally:
             gate.release(session_id)
-            registry.finish(handle)
+            registry.finish(handle, result)
+
+    @app.get("/v1/runs/{run_id}", response_model=RunStatusResponse)
+    async def run_status(
+        run_id: str,
+        response: Response,
+        identity: Annotated[Identity, Depends(_authorize)],
+    ) -> RunStatusResponse:
+        """Return the current state and retained result of one run."""
+        record = registry.remembered(run_id)
+        if record is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"unknown run: {run_id}",
+            )
+        if record.principal != identity.principal:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="run belongs to another principal",
+            )
+        response.headers["X-Run-Id"] = run_id
+        response.headers["X-Session-Id"] = str(record.session_id)
+        return RunStatusResponse(
+            run_id=run_id,
+            session_id=record.session_id,
+            status=record.status,
+            result=record.result,
+        )
 
     @app.get("/v1/runs/{run_id}/report")
     async def run_report(
