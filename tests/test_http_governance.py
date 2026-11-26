@@ -355,3 +355,59 @@ def test_audit_log_records_principal_and_status(tmp_path: Path) -> None:
     assert events[1]["status"] == "completed"
     assert events[1]["run_id"] == response.headers["x-run-id"]
     assert UUID(events[1]["session_id"])
+
+
+def test_run_status_reports_running_then_completed(tmp_path: Path) -> None:
+    provider = _BlockingProvider()
+    app = _app(provider)
+    payload = _payload(tmp_path, run_id="run-1")
+
+    async def scenario() -> tuple[httpx.Response, httpx.Response]:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            run = asyncio.create_task(client.post("/v1/runs", json=payload))
+            await asyncio.wait_for(provider.started.wait(), timeout=5)
+            running = await client.get("/v1/runs/run-1")
+            provider.release.set()
+            completed_run = await asyncio.wait_for(run, timeout=5)
+            assert completed_run.status_code == 200, completed_run.text
+            completed = await client.get("/v1/runs/run-1")
+            return running, completed
+
+    running, completed = asyncio.run(scenario())
+
+    assert running.status_code == 200, running.text
+    assert running.json()["status"] == "running"
+    assert running.json()["result"] is None
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["status"] == "completed"
+    assert completed.json()["result"]["answer"] == "done"
+
+
+def test_run_status_enforces_principal_and_allows_read_scope(
+    tmp_path: Path,
+) -> None:
+    app = _app(
+        FakeProvider([ModelResponse(content="done")]),
+        http_api_keys={
+            "write-key": {"principal": "alice", "scope": "write"},
+            "read-key": {"principal": "alice", "scope": "read"},
+            "bob-key": {"principal": "bob", "scope": "read"},
+        },
+    )
+
+    with TestClient(app) as client:
+        run = client.post(
+            "/v1/runs",
+            json=_payload(tmp_path, run_id="run-1"),
+            headers=_auth("write-key"),
+        )
+        assert run.status_code == 200, run.text
+        same_principal = client.get("/v1/runs/run-1", headers=_auth("read-key"))
+        other_principal = client.get("/v1/runs/run-1", headers=_auth("bob-key"))
+
+    assert same_principal.status_code == 200, same_principal.text
+    assert same_principal.json()["result"]["answer"] == "done"
+    assert other_principal.status_code == 403

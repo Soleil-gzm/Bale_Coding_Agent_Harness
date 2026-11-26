@@ -125,3 +125,44 @@ def test_stream_reports_status_denied_tool_calls(tmp_path: Path) -> None:
     assert '"event":"tool_call"' in body
     assert '"status":"denied"' in body
     assert not (tmp_path / "a.txt").exists()
+
+
+def test_run_status_returns_final_result(tmp_path: Path) -> None:
+    provider = FakeProvider([ModelResponse(content="done")])
+
+    with _client(provider) as client:
+        run = client.post("/v1/runs", json=_payload(tmp_path, run_id="run-1"))
+        assert run.status_code == 200, run.text
+        response = client.get("/v1/runs/run-1")
+
+    assert response.status_code == 200, response.text
+    assert response.headers["x-run-id"] == "run-1"
+    payload = response.json()
+    assert response.headers["x-session-id"] == payload["session_id"]
+    assert payload["run_id"] == "run-1"
+    assert payload["status"] == "completed"
+    assert payload["result"]["status"] == "completed"
+    assert payload["result"]["answer"] == "done"
+
+
+def test_stream_run_status_returns_final_result(tmp_path: Path) -> None:
+    provider = FakeProvider([ModelResponse(content="done")])
+
+    with _client(provider) as client:
+        with client.stream(
+            "POST", "/v1/runs/stream", json=_payload(tmp_path, run_id="run-1")
+        ) as response:
+            body = "".join(response.iter_text())
+        assert response.status_code == 200, body
+        status = client.get("/v1/runs/run-1")
+
+    assert status.status_code == 200, status.text
+    assert status.json()["status"] == "completed"
+    assert status.json()["result"]["answer"] == "done"
+
+
+def test_run_status_returns_404_for_unknown_run(tmp_path: Path) -> None:
+    with _client(FakeProvider()) as client:
+        response = client.get("/v1/runs/missing")
+
+    assert response.status_code == 404
