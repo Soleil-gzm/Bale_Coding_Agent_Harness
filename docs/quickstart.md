@@ -497,7 +497,16 @@ curl -X POST http://127.0.0.1:8000/v1/runs \
   -d '{"message": "Inspect the repository", "workspace": "/absolute/path/workspace", "shadow_git": false}'
 ```
 
-`/v1/runs` 与 `/v1/runs/stream` 都返回 `X-Run-Id`。请求可自带 `run_id`（仅字母、数字、`.`、`_`、`-`）以便在运行中取消：
+`/v1/runs` 与 `/v1/runs/stream` 都返回 `X-Run-Id`。请求可自带 `run_id`（仅字母、数字、`.`、`_`、`-`）以便查询或取消。运行状态与保留结果通过 `GET /v1/runs/{run_id}` 查询：
+
+```bash
+curl http://127.0.0.1:8000/v1/runs/inspect-1 \
+  -H "Authorization: Bearer $BALE_HTTP_API_KEY"
+```
+
+运行中返回 `status: "running"` 与 `result: null`；完成后 `status` 为终态，`result` 为完整 `RunResult`。响应带 `X-Run-Id` 与 `X-Session-Id`，仅同一 `principal` 可读，同一主体的 read-scope Key 也可查询；其他主体返回 403。未知或超出最近 200 条进程内记录的 Run 返回 404；状态与结果在重启后丢失，也不跨副本共享。此接口不要求启用 `BALE_HTTP_SESSION_DB`。
+
+取消运行中的 Run：
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/runs/inspect-1/cancel

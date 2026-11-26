@@ -116,6 +116,7 @@ Token 数与成本都是确定性估算，不等于 Provider 账单。默认 Fak
 | `BALE_HTTP_APPROVAL_TIMEOUT_SECONDS` | 审批等待上限；到期未决定按拒绝处理，写入不会发生 |
 | `BALE_HTTP_AUDIT_LOG` | 追加 JSONL：`run_started`、`run_finished`、`run_cancelled`、`run_failed`、`approval_requested`、`approval_decided`、`approval_result`、`report_rendered`；不记录提示词与工具参数 |
 | `BALE_MCP_CONFIG` | 应用 lifespan 内加载并复用 MCP 会话；文件缺失或 JSON/字段非法时拒绝启动 |
+| `GET /v1/runs/{run_id}` | 查询运行状态与保留结果；运行中 `result=null`，完成后返回完整 `RunResult`；仅同一 `principal` 可读，状态保存在进程内最近 200 条记录中，不要求 Session 持久化 |
 | `GET /v1/runs/{run_id}/report` | 需要 `BALE_HTTP_SESSION_DB`；把该 Run 所属 Session 渲染为 `text/markdown`，仅同一 `principal` 可读；未配置 Session 返回 400，未知 Run 返回 404 |
 | `BALE_TRACE_PATH` | HTTP 执行同样写入默认 Trace；SSE 还会把事件推送到响应流 |
 | `BALE_TRACE_MAX_BYTES` / `BALE_TRACE_BACKUPS` | CLI 与 HTTP 共用同一轮转策略：写入前若超过上限则轮转，保留指定数量的 `.N` 备份 |

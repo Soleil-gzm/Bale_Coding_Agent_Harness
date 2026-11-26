@@ -24,7 +24,7 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - `ModelProvider` 定义最小异步契约，`FakeProvider` 提供确定性离线响应并记录收到的 Turn；`OpenAICompatibleProvider` 通过标准库 `urllib` 调用任意 OpenAI 兼容 `/chat/completions` 端点（OpenAI、DeepSeek、Ollama），429/5xx 指数退避，错误信息自动脱敏。
 - `bale turn` 与 `POST /v1/turns` 复用同一 `build_turn()` 构造逻辑，返回字段一致的 `created` Turn。
 - `POST /v1/runs` 执行一个 Turn 并返回 `RunResult`；`POST /v1/runs/stream` 执行同一 Turn，以 SSE 推送 Trace 事件，最后发送 `result` 事件。
-- CLI 和 HTTP 只创建 Turn，不调用模型或工具。
+- `bale turn` 与 `POST /v1/turns` 只构造 Turn；`bale run`、`bale chat` 与 `/v1/runs` 系列入口调用共享 Runtime 执行，不分别实现 Agent 逻辑。
 
 ### 只读与写入运行时
 
@@ -57,6 +57,7 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 
 - `POST /v1/runs` 在服务端执行一个 Turn，返回与 CLI 一致的 `RunResult`；`approve_writes` 默认 `false`，未开启审批时写/执行工具被拒绝。
 - `POST /v1/runs/stream` 返回 `text/event-stream`：先发送 `event: run`（`run_id`），再逐条发送 `event: trace`，结束时发送 `event: result`；执行异常发送 `event: error`。
+- `GET /v1/runs/{run_id}` 查询运行状态与保留结果：运行中返回 `status=running`、`result=null`，结束后返回终态与完整 `RunResult`；仅同一 `principal` 可读，进程内最多保留最近 200 个 Run，重启后不保留。
 - `GET /health` 始终公开；设置 `BALE_HTTP_API_KEY` 或 `BALE_HTTP_API_KEYS` 后所有 `/v1` 路由要求 `Authorization: Bearer`，认证结果写入 `X-Bale-Principal`。
 - 两个执行接口都返回 `X-Run-Id`；请求可自带 `run_id`，并用 `POST /v1/runs/{run_id}/cancel` 在下一个迭代边界协作取消，未知或已结束的 `run_id` 返回 404。
 - `BALE_HTTP_SESSION_DB` 启用 SQLite Session：响应返回 `X-Session-Id`，请求可传 `session_id` 复用；同一会话的并发 Run 返回 409。
