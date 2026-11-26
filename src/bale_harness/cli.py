@@ -315,7 +315,9 @@ def eval_command(
         output.write_text(markdown, encoding="utf-8")
     if json_output is not None:
         json_output.parent.mkdir(parents=True, exist_ok=True)
-        json_output.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+        json_output.write_text(
+            report.model_dump_json(indent=2, exclude_none=True), encoding="utf-8"
+        )
     typer.echo(
         f"passed {report.passed}/{report.total} "
         f"(failed {report.failed}, errors {report.errors})"

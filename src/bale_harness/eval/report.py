@@ -59,4 +59,23 @@ def render_markdown(report: EvalReport) -> str:
                 )
         else:
             lines.append("- Checks: none")
+        if outcome.integrity is not None:
+            integrity = outcome.integrity
+            verdict = "ok" if integrity.ok else "VIOLATION"
+            lines.append(
+                f"- Integrity: {verdict} "
+                f"({integrity.files_changed} files, "
+                f"+{integrity.lines_added}/-{integrity.lines_removed})"
+            )
+            for violation in integrity.violations:
+                where = f"`{violation.path}` " if violation.path else ""
+                lines.append(f"  - {violation.code} {where}— {_cell(violation.detail)}")
+        if outcome.oracle is not None:
+            oracle = outcome.oracle
+            verdict = "passed" if oracle.all_passed else "FAILED"
+            lines.append(
+                f"- Oracle: {verdict} "
+                f"(f2p {oracle.f2p.status}, p2p {oracle.p2p.status}, "
+                f"hidden {oracle.hidden.status})"
+            )
     return "\n".join(lines) + "\n"

@@ -16,8 +16,10 @@ from bale_harness.eval.report import render_markdown
 from bale_harness.eval.runner import (
     CheckResult,
     EvalReport,
+    PreflightResult,
     TaskOutcome,
     evaluate_checks,
+    preflight_task,
     run_task,
     run_tasks,
 )
@@ -49,6 +51,7 @@ __all__ = [
     "OracleEvaluation",
     "OracleGroupResult",
     "OracleSpec",
+    "PreflightResult",
     "ScenarioSpec",
     "SuiteManifest",
     "TaskOutcome",
@@ -56,6 +59,7 @@ __all__ = [
     "evaluate_checks",
     "evaluate_oracle",
     "parse_junit",
+    "preflight_task",
     "fixture_directory",
     "load_suite",
     "load_tasks",
