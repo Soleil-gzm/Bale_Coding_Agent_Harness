@@ -5,12 +5,18 @@ task that declares oracle commands is verified through ``preflight_task``
 (pristine f2p fails, pristine p2p passes, gold passes all groups).
 """
 
+import re
 from pathlib import Path
 
+from typer.testing import CliRunner
+
+from bale_harness.cli import app
 from bale_harness.eval import load_suite, preflight_task, validate_suite_categories
 
 GOLDEN_ROOT = Path(__file__).resolve().parents[1] / "examples" / "eval" / "golden"
 SUITE_PATH = GOLDEN_ROOT / "suite.json"
+_SUMMARY = re.compile(r"passed (\d+)/20 \(failed (\d+), errors (\d+)\)")
+CLI = CliRunner()
 
 
 def _load():
@@ -145,3 +151,30 @@ def test_recovery_tasks_use_interrupt_scenarios() -> None:
         assert task.scenario.type == "recovery"
         assert task.scenario.interrupt is not None
         assert getattr(task.scenario.interrupt, trigger) == 1
+
+
+def _run_golden_cli(monkeypatch) -> object:
+    monkeypatch.setenv("BALE_PROVIDER", "fake")
+    return CLI.invoke(app, ["eval", "--suite", str(SUITE_PATH), "--skip-preflight"])
+
+
+def test_cli_golden_suite_structural_regression(monkeypatch) -> None:
+    first = _run_golden_cli(monkeypatch)
+    second = _run_golden_cli(monkeypatch)
+
+    assert "preflight failed" not in first.output
+    assert "category check failed" not in first.output
+
+    match = _SUMMARY.search(first.output)
+    assert match is not None, first.output
+    passed, failed, errors = (int(group) for group in match.groups())
+    # FakeProvider cannot repair code, but read/security tasks need no writes.
+    assert errors == 0
+    assert passed == 8
+    assert failed == 12
+    # Failed tasks make the process exit non-zero: exit code tracks the result.
+    assert first.exit_code == 1
+
+    # The same suite must produce the same summary on a second run.
+    assert second.output.count(match.group(0)) == 1
+    assert second.exit_code == first.exit_code

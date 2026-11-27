@@ -25,7 +25,12 @@ bale eval --tasks examples/eval/tasks.json
 bale eval --tasks examples/eval/tasks.json \
   --output reports/eval.md \
   --json reports/eval.json
+
+# 官方 golden 套件（20 个任务，read/edit/test/recovery/security = 5/6/3/3/3）
+bale eval --suite examples/eval/golden/suite.json
 ```
+
+`--suite` 与 `--tasks` 互斥。suite 运行前会做分类数量校验，并对声明了 `gold_patch` 的任务执行数据质量 preflight（`--skip-preflight` 可跳过）。
 
 预期输出末尾：
 
