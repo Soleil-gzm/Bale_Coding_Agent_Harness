@@ -140,13 +140,24 @@ def _relative_parts(path: Path, root: Path) -> tuple[str, ...] | None:
 
 
 def iter_source_files(root: Path) -> Iterator[tuple[Path, str]]:
-    """Yield ``(absolute_path, posix_relative_path)`` for candidate text files."""
-    root = Path(root)
+    """Yield ``(absolute_path, posix_relative_path)`` for candidate text files.
+
+    Symlinks are skipped and every candidate is resolved and checked against
+    the workspace root: indexing must never read (or ship to an embedding
+    endpoint) files outside the workspace through a link.
+    """
+    root = Path(root).resolve()
     count = 0
     for candidate in sorted(root.rglob("*")):
         if count >= MAX_FILES:
             return
         if not candidate.is_file():
+            continue
+        if candidate.is_symlink():
+            continue
+        try:
+            candidate.resolve().relative_to(root)
+        except (OSError, RuntimeError, ValueError):
             continue
         parts = _relative_parts(candidate, root)
         if parts is None or not parts:

@@ -78,6 +78,30 @@ def test_hybrid_recalls_vector_only_match(tmp_path: Path) -> None:
     assert hits[0].vector_score is not None
 
 
+def test_hybrid_does_not_embed_symlinked_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write(
+        tmp_path / "real.py",
+        "def calculate_total(items):\n    return sum(items)\n",
+    )
+    _write(tmp_path / "linked.py", "outside-secret-token\n")
+    original = Path.is_symlink
+    monkeypatch.setattr(
+        Path,
+        "is_symlink",
+        lambda self: self.name == "linked.py" or original(self),
+    )
+    embedder = CountingEmbedder()
+    index = HybridIndex(tmp_path, embedder=embedder)
+
+    index.search("calculate total")
+
+    embedded = [text for batch in embedder.calls for text in batch]
+    assert embedded
+    assert all("outside-secret-token" not in text for text in embedded)
+
+
 def test_hybrid_ranks_lexical_hit_without_embedder(tmp_path: Path) -> None:
     _write(
         tmp_path / "alpha.py", "def calculate_total(items):\n    return sum(items)\n"

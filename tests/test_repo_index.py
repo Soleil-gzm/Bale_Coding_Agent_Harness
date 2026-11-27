@@ -2,6 +2,7 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from bale_harness.agent.security import WorkspaceGuard
@@ -162,6 +163,36 @@ def test_index_returns_no_hits_for_unknown_terms(tmp_path: Path) -> None:
 
     assert index.search("zzz_missing") == []
     assert index.search("   ") == []
+
+
+def test_iter_source_files_skips_symlinks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "real.py").write_text("alpha\n", encoding="utf-8")
+    (tmp_path / "linked.py").write_text("outside-secret\n", encoding="utf-8")
+    original = Path.is_symlink
+    monkeypatch.setattr(
+        Path,
+        "is_symlink",
+        lambda self: self.name == "linked.py" or original(self),
+    )
+
+    assert [path for _, path in iter_source_files(tmp_path)] == ["real.py"]
+
+
+def test_iter_source_files_skips_symlinks_to_outside_files(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-secret.py"
+    outside.write_text("outside-secret\n", encoding="utf-8")
+    link = tmp_path / "linked.py"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink creation not permitted in this environment")
+
+    index = Bm25Index.from_directory(tmp_path)
+
+    assert index.search("outside-secret") == []
+    assert [path for _, path in iter_source_files(tmp_path)] == []
 
 
 def test_search_code_tool_formats_hits(tmp_path: Path) -> None:
