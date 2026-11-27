@@ -19,7 +19,8 @@ def _shell(tmp_path: Path) -> ShellTool:
 
 
 def _run_tests(tmp_path: Path) -> RunTestsTool:
-    return RunTestsTool(LocalSandbox(WorkspaceGuard(tmp_path)))
+    guard = WorkspaceGuard(tmp_path)
+    return RunTestsTool(LocalSandbox(guard), guard)
 
 
 def test_split_command_accepts_list_and_string() -> None:
@@ -125,11 +126,56 @@ class _RecordingSandbox:
         return ExecResult(command=command, exit_code=0, stdout="ok")
 
 
-def test_run_tests_uses_the_sandbox_python() -> None:
+def test_run_tests_uses_the_sandbox_python(tmp_path: Path) -> None:
     sandbox = _RecordingSandbox()
 
-    result = _run(RunTestsTool(sandbox), {"path": "."})
+    result = _run(RunTestsTool(sandbox, WorkspaceGuard(tmp_path)), {"path": "."})
 
     assert result.status == "success"
     assert sandbox.command is not None
     assert sandbox.command[0] == "python-in-container"
+
+
+def test_run_tests_rejects_paths_outside_the_workspace(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-tests"
+    outside.mkdir()
+
+    for target in ("..", str(outside)):
+        result = _run(_run_tests(tmp_path), {"path": target})
+        assert result.status == "error", target
+        assert result.error_code == "path_escape", target
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["-p", "evil_plugin"],
+        ["-pno:cacheprovider"],
+        ["-c", "pytest.ini"],
+        ["-o", "addopts=-p evil_plugin"],
+        ["--basetemp", "tmpdir"],
+        ["--rootdir=/"],
+        ["--confcutdir", ".."],
+        ["/etc/pytest_plugin.py"],
+        ["..\\outside\\test_x.py"],
+        ["--deselect=/outside/test_x.py"],
+    ],
+)
+def test_run_tests_rejects_dangerous_args(tmp_path: Path, extra: list[str]) -> None:
+    result = _run(_run_tests(tmp_path), {"path": ".", "args": extra})
+
+    assert result.status == "error"
+    assert result.error_code == "invalid_arguments"
+
+
+def test_run_tests_allows_safe_args(tmp_path: Path) -> None:
+    (tmp_path / "test_ok.py").write_text(
+        "def test_ok():\n    assert True\n", encoding="utf-8"
+    )
+
+    result = _run(
+        _run_tests(tmp_path),
+        {"path": ".", "args": ["-k", "test_ok"]},
+    )
+
+    assert result.status == "success", result.content

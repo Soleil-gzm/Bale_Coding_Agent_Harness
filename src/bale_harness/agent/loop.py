@@ -970,7 +970,7 @@ def build_default_loop(
             search_index_path=search_index_path,
         ),
         *build_write_tools(guard),
-        *build_exec_tools(sandbox or LocalSandbox(guard), span_sink=span_sink),
+        *build_exec_tools(sandbox or LocalSandbox(guard), guard, span_sink=span_sink),
         *build_git_tools(checkpoint),
     ]
     tools.extend(extra_tools or [])

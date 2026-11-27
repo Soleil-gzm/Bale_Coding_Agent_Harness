@@ -8,6 +8,7 @@ with paths or spaces should use the list form.
 
 import shlex
 import time
+from pathlib import Path
 from typing import Any
 
 from bale_harness.agent.messages import ToolSpec
@@ -17,12 +18,41 @@ from bale_harness.agent.sandbox import (
     Sandbox,
     SandboxViolation,
 )
+from bale_harness.agent.security import WorkspaceError, WorkspaceGuard
 from bale_harness.agent.tools.common import error, success, truncate
 from bale_harness.agent.tools.registry import BaseTool
 from bale_harness.agent.trace import SpanSink
 from bale_harness.contracts import ToolResult
 
 SHELL_METACHARACTERS = ("|", "&", ";", ">", "<", "`", "$(")
+
+DENIED_PYTEST_OPTIONS = frozenset(
+    {"-p", "-c", "-o", "--basetemp", "--rootdir", "--confcutdir", "--override-ini"}
+)
+_DENIED_SHORT_OPTIONS = ("-p", "-c", "-o")
+
+
+def _unsafe_pytest_arg(args: list[str]) -> str | None:
+    """Return a reason when an extra pytest argument could leave the workspace.
+
+    Plugins (``-p``), config files (``-c``/``-o``/``--override-ini``) and temp
+    or root overrides (``--basetemp``/``--rootdir``/``--confcutdir``) can make
+    pytest execute or delete things outside the workspace, so they are denied
+    outright. Absolute and ``..`` paths are denied for the same reason.
+    """
+    for arg in args:
+        if arg in DENIED_PYTEST_OPTIONS:
+            return f"pytest option not allowed: {arg}"
+        if any(arg.startswith(f"{option}=") for option in DENIED_PYTEST_OPTIONS):
+            return f"pytest option not allowed: {arg}"
+        if len(arg) > 2 and arg.startswith(_DENIED_SHORT_OPTIONS):
+            return f"pytest option not allowed: {arg}"
+        value = arg.split("=", 1)[1] if arg.startswith("--") and "=" in arg else arg
+        if value.startswith(("/", "\\")) or Path(value).is_absolute():
+            return f"absolute path not allowed in args: {arg}"
+        if ".." in Path(value).parts:
+            return f"path traversal not allowed in args: {arg}"
+    return None
 
 
 async def _sandbox_run(
@@ -226,8 +256,14 @@ class RunTestsTool(BaseTool):
         timeout_ms=300_000,
     )
 
-    def __init__(self, sandbox: Sandbox, span_sink: SpanSink | None = None) -> None:
+    def __init__(
+        self,
+        sandbox: Sandbox,
+        guard: WorkspaceGuard,
+        span_sink: SpanSink | None = None,
+    ) -> None:
         self._sandbox = sandbox
+        self._guard = guard
         self._span_sink = span_sink
 
     def validate_arguments(self, arguments: dict[str, Any]) -> None:
@@ -239,6 +275,9 @@ class RunTestsTool(BaseTool):
             isinstance(item, str) for item in extra
         ):
             raise ValueError("args must be a list of strings")
+        unsafe = _unsafe_pytest_arg(extra)
+        if unsafe is not None:
+            raise ValueError(unsafe)
         timeout_s = arguments.get("timeout_s", 240)
         if isinstance(timeout_s, bool) or not isinstance(timeout_s, int | float):
             raise ValueError("timeout_s must be a number")
@@ -249,6 +288,22 @@ class RunTestsTool(BaseTool):
         start = time.perf_counter()
         target = arguments.get("path", ".") or "."
         extra = list(arguments.get("args", []))
+        unsafe = _unsafe_pytest_arg(extra)
+        if unsafe is not None:
+            return error("run_tests", unsafe, "invalid_arguments", start)
+        try:
+            resolved = self._guard.resolve(target)
+        except WorkspaceError:
+            return error(
+                "run_tests",
+                f"path escapes workspace: {target}",
+                "path_escape",
+                start,
+            )
+        if resolved == self._guard.root:
+            target = "."
+        else:
+            target = resolved.relative_to(self._guard.root).as_posix()
         timeout_s = float(arguments.get("timeout_s", 240))
         argv = [
             self._sandbox.python_executable,
@@ -303,7 +358,10 @@ class RunTestsTool(BaseTool):
 
 
 def build_exec_tools(
-    sandbox: Sandbox, span_sink: SpanSink | None = None
+    sandbox: Sandbox, guard: WorkspaceGuard, span_sink: SpanSink | None = None
 ) -> list[BaseTool]:
-    """Return the command-executing tools wired to ``sandbox``."""
-    return [ShellTool(sandbox, span_sink), RunTestsTool(sandbox, span_sink)]
+    """Return the command-executing tools wired to ``sandbox`` and ``guard``."""
+    return [
+        ShellTool(sandbox, span_sink),
+        RunTestsTool(sandbox, guard, span_sink),
+    ]
