@@ -23,6 +23,8 @@ data/
 logs/
 traces/
 workspace/
+artifacts/
+reports/
 *.log
 *.db
 *.sqlite
