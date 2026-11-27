@@ -29,7 +29,8 @@ from bale_harness.agent.loop import build_default_loop
 from bale_harness.agent.sandbox import Sandbox
 from bale_harness.agent.security import WorkspaceError, WorkspaceGuard
 from bale_harness.contracts import Turn
-from bale_harness.eval.integrity import IntegrityResult, check_integrity
+from bale_harness.eval.evidence import EvidenceLayout, write_task_evidence
+from bale_harness.eval.integrity import IntegrityResult, check_integrity, render_diff
 from bale_harness.eval.manifest import EvalManifest
 from bale_harness.eval.oracle import OracleEvaluation, build_eval_env, evaluate_oracle
 from bale_harness.eval.scenarios import run_scenario
@@ -303,11 +304,14 @@ async def run_task(
     provider: ModelProvider,
     sandbox_factory: SandboxFactory | None = None,
     base_dir: Path | None = None,
+    evidence_dir: Path | None = None,
 ) -> TaskOutcome:
     """Run one task; v2 tasks use the three-workspace integrity/oracle flow."""
     if isinstance(task, EvalTaskV2):
-        return await _run_v2_task(task, fixture, provider, sandbox_factory, base_dir)
-    return await _run_v1_task(task, fixture, provider, sandbox_factory)
+        return await _run_v2_task(
+            task, fixture, provider, sandbox_factory, base_dir, evidence_dir
+        )
+    return await _run_v1_task(task, fixture, provider, sandbox_factory, evidence_dir)
 
 
 async def _run_v1_task(
@@ -315,6 +319,7 @@ async def _run_v1_task(
     fixture: Path,
     provider: ModelProvider,
     sandbox_factory: SandboxFactory | None,
+    evidence_dir: Path | None = None,
 ) -> TaskOutcome:
     """Legacy single-workspace execution: copy fixture, run agent, check files."""
     started = time.perf_counter()
@@ -347,7 +352,7 @@ async def _run_v1_task(
         else:
             status = "passed"
             error = None
-        return TaskOutcome(
+        outcome = TaskOutcome(
             task_id=task.id,
             description=task.description,
             status=status,
@@ -360,14 +365,20 @@ async def _run_v1_task(
             duration_ms=_elapsed_ms(started),
             check_results=check_results,
         )
+        if evidence_dir is not None:
+            write_task_evidence(evidence_dir, outcome)
+        return outcome
     except Exception as error:  # fixture or runtime failure becomes a task error
-        return TaskOutcome(
+        outcome = TaskOutcome(
             task_id=task.id,
             description=task.description,
             status="error",
             error=f"{type(error).__name__}: {error}",
             duration_ms=_elapsed_ms(started),
         )
+        if evidence_dir is not None:
+            write_task_evidence(evidence_dir, outcome)
+        return outcome
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 
@@ -378,6 +389,7 @@ async def _run_v2_task(
     provider: ModelProvider,
     sandbox_factory: SandboxFactory | None,
     base_dir: Path | None = None,
+    evidence_dir: Path | None = None,
 ) -> TaskOutcome:
     """Three-workspace execution: pristine diff, integrity gate, oracle verify."""
     started = time.perf_counter()
@@ -385,7 +397,9 @@ async def _run_v2_task(
     pristine = temp_root / "pristine"
     workspace = temp_root / "workspace"
     verification = temp_root / "verification"
-    evidence = temp_root / "evidence"
+    evidence = evidence_dir or (temp_root / "evidence")
+    if evidence_dir is not None:
+        evidence_dir.mkdir(parents=True, exist_ok=True)
     try:
         _copy_tree(fixture, pristine)
         _copy_tree(fixture, workspace)
@@ -430,7 +444,7 @@ async def _run_v2_task(
             status = "passed"
             error = None
 
-        return TaskOutcome(
+        outcome = TaskOutcome(
             task_id=task.id,
             description=task.description,
             status=status,
@@ -445,14 +459,24 @@ async def _run_v2_task(
             oracle=oracle_outcome,
             integrity=integrity_outcome,
         )
+        if evidence_dir is not None:
+            write_task_evidence(
+                evidence_dir,
+                outcome,
+                diff=render_diff(pristine, workspace),
+            )
+        return outcome
     except Exception as error:  # fixture or runtime failure becomes a task error
-        return TaskOutcome(
+        outcome = TaskOutcome(
             task_id=task.id,
             description=task.description,
             status="error",
             error=f"{type(error).__name__}: {error}",
             duration_ms=_elapsed_ms(started),
         )
+        if evidence_dir is not None:
+            write_task_evidence(evidence_dir, outcome)
+        return outcome
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 
@@ -561,9 +585,11 @@ async def run_tasks(
     base_dir: Path,
     provider_factory: ProviderFactory | None = None,
     sandbox_factory: SandboxFactory | None = None,
+    evidence_root: Path | None = None,
 ) -> EvalReport:
     """Run tasks sequentially with a fresh provider and workspace per task."""
     factory: ProviderFactory = provider_factory or (lambda task: FakeProvider())
+    layout = EvidenceLayout(evidence_root) if evidence_root is not None else None
     started = time.perf_counter()
     started_at = datetime.now(UTC).isoformat()
     outcomes: list[TaskOutcome] = []
@@ -579,8 +605,16 @@ async def run_tasks(
                 )
             )
             continue
+        evidence_dir = layout.task_dir(task.id) if layout is not None else None
         outcomes.append(
-            await run_task(task, fixture, factory(task), sandbox_factory, base_dir)
+            await run_task(
+                task,
+                fixture,
+                factory(task),
+                sandbox_factory,
+                base_dir,
+                evidence_dir,
+            )
         )
 
     passed = sum(1 for outcome in outcomes if outcome.status == "passed")

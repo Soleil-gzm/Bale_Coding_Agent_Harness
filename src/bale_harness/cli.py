@@ -32,6 +32,7 @@ from bale_harness.agent.tools.mcp import (
 )
 from bale_harness.agent.trace import JsonlTraceExporter, read_trace
 from bale_harness.contracts import ApprovalMode, Turn
+from bale_harness.eval.evidence import EvidenceLayout, write_manifest, write_report
 from bale_harness.eval.manifest import build_manifest
 from bale_harness.eval.report import render_markdown
 from bale_harness.eval.runner import EvalReport, preflight_task, run_tasks
@@ -281,6 +282,16 @@ def eval_command(
             help="Skip the suite category distribution check (5/6/3/3/3)",
         ),
     ] = False,
+    artifacts_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--artifacts-dir",
+            help=(
+                "Persist manifest.json, report.json/md, and per-task evidence "
+                "under this directory"
+            ),
+        ),
+    ] = None,
     output: Annotated[
         Path | None, typer.Option(help="Write the Markdown report to this file")
     ] = None,
@@ -370,12 +381,16 @@ def eval_command(
             user=settings.sandbox_user,
         )
 
+    layout = EvidenceLayout(artifacts_dir) if artifacts_dir is not None else None
+    if layout is not None:
+        layout.ensure()
     report: EvalReport = asyncio.run(
         run_tasks(
             task_list,
             task_file.parent,
             lambda _task: create_provider(settings),
             sandbox_factory,
+            evidence_root=layout.root if layout is not None else None,
         )
     )
     report.manifest = build_manifest(
@@ -388,6 +403,9 @@ def eval_command(
         suite_version=suite_version,
     )
     markdown = render_markdown(report)
+    if layout is not None and report.manifest is not None:
+        write_manifest(layout, report.manifest)
+        write_report(layout, report, markdown)
     if output is None:
         typer.echo(markdown)
     else:

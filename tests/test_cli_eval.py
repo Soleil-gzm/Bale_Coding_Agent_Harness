@@ -199,3 +199,20 @@ def test_eval_json_includes_manifest(tmp_path: Path, monkeypatch) -> None:
     assert data["manifest"]["task_count"] == 20
     assert len(data["manifest"]["dataset"]["content_sha256"]) == 64
     assert data["manifest"]["model"]["provider"] == "fake"
+
+
+def test_eval_artifacts_dir_persists_evidence(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BALE_PROVIDER", "fake")
+    suite_path = _write_suite(tmp_path, _suite_tasks(VALID_COUNTS))
+    artifacts = tmp_path / "artifacts"
+
+    result = runner.invoke(
+        app, ["eval", "--suite", str(suite_path), "--artifacts-dir", str(artifacts)]
+    )
+
+    assert result.exit_code == 0, result.output
+    manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads((artifacts / "report.json").read_text(encoding="utf-8"))
+    assert report["manifest"]["run_id"] == manifest["run_id"]
+    assert (artifacts / "report.md").is_file()
+    assert (artifacts / "tasks" / "task-1" / "0" / "outcome.json").is_file()

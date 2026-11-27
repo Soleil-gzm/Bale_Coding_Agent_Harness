@@ -1,8 +1,10 @@
 """Fixed tasks, deterministic checks, and reports for offline evaluation."""
 
+from bale_harness.eval.evidence import EvidenceLayout
 from bale_harness.eval.integrity import (
     IntegrityResult,
     check_integrity,
+    render_diff,
     snapshot,
 )
 from bale_harness.eval.interrupt import InterruptController, InterruptSpec
@@ -66,6 +68,7 @@ __all__ = [
     "EvalTaskError",
     "EXPECTED_CATEGORY_COUNTS",
     "EvalTaskV2",
+    "EvidenceLayout",
     "GitFingerprint",
     "IntegrityResult",
     "IntegritySpec",
@@ -93,6 +96,7 @@ __all__ = [
     "parse_junit",
     "preflight_task",
     "fixture_directory",
+    "render_diff",
     "load_suite",
     "load_tasks",
     "render_markdown",

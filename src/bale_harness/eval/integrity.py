@@ -125,6 +125,46 @@ def _is_test_path(rel_path: str) -> bool:
     return any(posix.match(pattern) for pattern in _TEST_GLOBS)
 
 
+def _is_binary(path: Path | None) -> bool:
+    if path is None or not path.exists():
+        return False
+    return b"\x00" in path.read_bytes()[:8192]
+
+
+def render_diff(pristine_root: Path, candidate_root: Path) -> str:
+    """Render a unified diff between two snapshots with posix paths.
+
+    The output uses ``diff --git a/<path> b/<path>`` headers so the text is
+    directly applicable with ``git apply -p1``. Binary files are reported as
+    differing without content.
+    """
+    pristine_root = Path(pristine_root)
+    candidate_root = Path(candidate_root)
+    before = snapshot(pristine_root)
+    after = snapshot(candidate_root)
+    chunks: list[str] = []
+    for rel in sorted(set(before) | set(after)):
+        before_path = pristine_root / rel if rel in before else None
+        after_path = candidate_root / rel if rel in after else None
+        if _is_binary(before_path) or _is_binary(after_path):
+            chunks.append(f"Binary files a/{rel} and b/{rel} differ\n")
+            continue
+        diff = list(
+            difflib.unified_diff(
+                _read_lines(before_path),
+                _read_lines(after_path),
+                fromfile=f"a/{rel}" if before_path is not None else "/dev/null",
+                tofile=f"b/{rel}" if after_path is not None else "/dev/null",
+                lineterm="\n",
+            )
+        )
+        if not diff:
+            continue
+        chunks.append(f"diff --git a/{rel} b/{rel}\n")
+        chunks.extend(line if line.endswith("\n") else f"{line}\n" for line in diff)
+    return "".join(chunks)
+
+
 def _matches_forbidden(rel_path: str, patterns: list[str]) -> bool:
     posix = PurePosixPath(rel_path)
     return any(posix.match(pattern) for pattern in patterns)
