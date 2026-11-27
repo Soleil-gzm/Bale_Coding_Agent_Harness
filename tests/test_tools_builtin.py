@@ -73,6 +73,24 @@ def test_read_file_truncates_large_files(tmp_path: Path) -> None:
 
     assert result.truncated is True
     assert len(result.content) <= MAX_READ_BYTES
+    assert result.metadata["bytes"] == MAX_READ_BYTES
+
+
+def test_read_file_never_materializes_the_whole_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    big = tmp_path / "big.txt"
+    big.write_text("x" * (MAX_READ_BYTES + 1000), encoding="utf-8")
+
+    def explode(self: Path) -> bytes:
+        raise AssertionError("read_file must not call read_bytes")
+
+    monkeypatch.setattr(Path, "read_bytes", explode)
+
+    result = _run(ReadFileTool(_guard(tmp_path)).execute({"path": "big.txt"}))
+
+    assert result.status == "success"
+    assert result.truncated is True
 
 
 def test_list_files_lists_entries_with_dir_marker(tmp_path: Path) -> None:

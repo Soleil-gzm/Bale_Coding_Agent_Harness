@@ -58,10 +58,14 @@ class ReadFileTool(BaseTool):
         if not resolved.is_file():
             return error("read_file", f"not a file: {rel}", "not_a_file", start)
 
-        total = resolved.stat().st_size
-        data = resolved.read_bytes()[:MAX_READ_BYTES]
+        # Read a bounded prefix instead of materializing the whole file: a
+        # multi-GB log inside the workspace must not OOM the run (or the HTTP
+        # process serving every run).
+        with resolved.open("rb") as handle:
+            data = handle.read(MAX_READ_BYTES + 1)
+        truncated = len(data) > MAX_READ_BYTES
+        data = data[:MAX_READ_BYTES]
         content = data.decode("utf-8", errors="replace")
-        truncated = total > MAX_READ_BYTES
         return success(
             "read_file",
             content,
