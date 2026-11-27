@@ -1,0 +1,14 @@
+# Normalize text files to LF in the repository and on checkout so Windows and
+# Linux runs see identical bytes (eval patch fixtures depend on this).
+* text=auto eol=lf
+
+# Binary assets must never be converted.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.db binary
+*.sqlite binary
