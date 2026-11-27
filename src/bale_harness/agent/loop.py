@@ -60,6 +60,10 @@ from bale_harness.providers import ModelProvider
 from bale_harness.repo_index import Embedder
 
 
+class _BudgetTimeout(TimeoutError):
+    """Internal marker: the turn budget expired, not the provider."""
+
+
 class Retriever(Protocol):
     """Supplies formatted workspace excerpts relevant to a turn message."""
 
@@ -306,10 +310,20 @@ class AgentLoop:
                     response: ModelResponse = await self._complete(
                         prompt, specs, remaining
                     )
-                except TimeoutError:
+                except _BudgetTimeout:
                     return await self._failed(
                         turn,
                         "time budget exceeded",
+                        iterations,
+                        tool_calls,
+                        total_usage,
+                        checkpoints,
+                        resumed,
+                    )
+                except TimeoutError:
+                    return await self._failed(
+                        turn,
+                        "model request timed out",
                         iterations,
                         tool_calls,
                         total_usage,
@@ -887,9 +901,17 @@ class AgentLoop:
         """Call the provider, capping the call at the remaining time budget."""
         if remaining is None:
             return await self._provider.complete(prompt, specs)
-        return await asyncio.wait_for(
-            self._provider.complete(prompt, specs), timeout=remaining
-        )
+        deadline = time.perf_counter() + remaining
+        try:
+            return await asyncio.wait_for(
+                self._provider.complete(prompt, specs), timeout=remaining
+            )
+        except TimeoutError as exc:
+            # A transport timeout raised by the provider is a different event
+            # from our deadline firing; only retag the latter as a budget stop.
+            if time.perf_counter() >= deadline:
+                raise _BudgetTimeout from exc
+            raise
 
     def _remaining_seconds(self, turn: Turn) -> float | None:
         if turn.time_budget is None or self._run_started is None:

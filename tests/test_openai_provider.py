@@ -269,6 +269,19 @@ def test_invalid_response_shapes_raise_provider_error() -> None:
     with pytest.raises(OpenAIProviderError, match="missing choices"):
         asyncio.run(provider.complete([_user()], []))
 
+
+def test_read_timeout_is_retried_and_wrapped() -> None:
+    transport = RecordingTransport(
+        [TimeoutError("read timed out"), TimeoutError("read timed out")]
+    )
+    provider = _provider(transport, max_retries=1)
+
+    with pytest.raises(OpenAIProviderError, match="timed out") as error:
+        asyncio.run(provider.complete([_user()], []))
+
+    assert len(transport.requests) == 2
+    assert "TimeoutError" not in str(error.value)
+
     provider = _provider(RecordingTransport([{"choices": [{}]}]))
     with pytest.raises(OpenAIProviderError, match="missing a message"):
         asyncio.run(provider.complete([_user()], []))

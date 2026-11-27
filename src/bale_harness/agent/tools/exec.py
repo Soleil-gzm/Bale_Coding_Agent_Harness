@@ -48,9 +48,10 @@ def _unsafe_pytest_arg(args: list[str]) -> str | None:
         if len(arg) > 2 and arg.startswith(_DENIED_SHORT_OPTIONS):
             return f"pytest option not allowed: {arg}"
         value = arg.split("=", 1)[1] if arg.startswith("--") and "=" in arg else arg
-        if value.startswith(("/", "\\")) or Path(value).is_absolute():
+        normalized = value.replace("\\", "/")
+        if normalized.startswith("/") or Path(value).is_absolute():
             return f"absolute path not allowed in args: {arg}"
-        if ".." in Path(value).parts:
+        if ".." in Path(normalized).parts:
             return f"path traversal not allowed in args: {arg}"
     return None
 

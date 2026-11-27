@@ -74,6 +74,32 @@ def _turn(tmp_path: Path, **overrides: object) -> Turn:
     return Turn(**values)
 
 
+class TimeoutProvider:
+    """Provider whose transport read times out without reaching the model."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def complete(self, messages, tools):
+        self.calls += 1
+        raise TimeoutError("read timed out")
+
+
+def test_transport_timeout_is_not_reported_as_a_budget_stop(
+    tmp_path: Path,
+) -> None:
+    provider = TimeoutProvider()
+    loop = build_default_loop(provider, tmp_path)
+
+    for budget in (None, 5.0):
+        provider.calls = 0
+        result = asyncio.run(loop.run(_turn(tmp_path, time_budget=budget)))
+
+        assert result.status == "failed"
+        assert result.error == "model request timed out"
+        assert provider.calls == 1
+
+
 def test_time_budget_allows_fast_turn(tmp_path: Path) -> None:
     provider = FakeProvider([ModelResponse(content="done")])
     loop = build_default_loop(provider, tmp_path)

@@ -68,6 +68,12 @@ class OpenAICompatibleProvider:
                 last_error = exc
             except urllib.error.URLError as exc:
                 last_error = exc
+            except TimeoutError:
+                # Read/connect timeouts are transient; retry them and surface a
+                # provider error so callers do not mistake them for budget stops.
+                last_error = OpenAIProviderError(
+                    self._redact(f"request timed out after {self._timeout_s}s")
+                )
             if attempt < self._max_retries:
                 await asyncio.sleep(_BACKOFF_BASE_S * 2**attempt)
         attempts = self._max_retries + 1
