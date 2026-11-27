@@ -105,7 +105,7 @@ flowchart LR
 | `agent/cost.py` | `CostRates` 与 `estimate_cost`：按每千 token 费率估算成本 | 不内置默认价格，结果不是 Provider 账单 |
 | `agent/report.py` | `build_report`：Session、已执行调用、记忆与 Trace 汇总为 Markdown；`markdown_to_html` 就地转换为转义后的独立 HTML | 只读投影，不调用模型、不改 Session、不生成 PDF |
 | `agent/loop.py` | ReAct 循环、终止/取消/迭代与 token、wall-clock 与成本预算、上下文重建、检索注入、Session 持久化、恢复、span 埋点（turn/context/retrieval/model/tool/checkpoint）、耗时与成本与 Diff 聚合 | 无远程 Trace 导出 |
-| `repo_index/index.py` | `chunk_source`：Python 顶层定义优先、行窗口回退；`Bm25Index`、`scores` 与 `SearchHit` | 纯词法基线，不读取磁盘快照 |
+| `repo_index/index.py` | `iter_source_files`（跳过符号链接、校验真实路径在工作区内）、`chunk_source`：Python 顶层定义优先、行窗口回退；`Bm25Index`、`scores` 与 `SearchHit` | 纯词法基线，不读取磁盘快照 |
 | `repo_index/hybrid.py` | `HybridIndex`：BM25 与向量分数归一化融合、按文件签名增量重建、可选 JSON 快照、embedding 失败降级 | 同步实现，索引构建发生在调用线程 |
 | `repo_index/embedding.py` | `Embedder` 协议、`OpenAIEmbedder` 与 `create_embedder`：标准库 `urllib` 调用 OpenAI 兼容 `/embeddings` | 不引入第三方向量库；远程端点缺少 Key 时返回 `None` |
 | `repo_index/store.py` | JSON 快照读写：版本校验、文件签名、片段与可选向量、原子替换 | 快照损坏时整体忽略并重建 |
