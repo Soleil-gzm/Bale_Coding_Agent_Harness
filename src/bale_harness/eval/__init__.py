@@ -26,6 +26,7 @@ from bale_harness.eval.runner import (
 )
 from bale_harness.eval.scenarios import ScenarioResult, run_scenario
 from bale_harness.eval.task import (
+    EXPECTED_CATEGORY_COUNTS,
     BudgetSpec,
     Check,
     EvalTask,
@@ -39,6 +40,7 @@ from bale_harness.eval.task import (
     load_suite,
     load_tasks,
     resolve_task_file,
+    validate_suite_categories,
 )
 
 __all__ = [
@@ -48,6 +50,7 @@ __all__ = [
     "EvalReport",
     "EvalTask",
     "EvalTaskError",
+    "EXPECTED_CATEGORY_COUNTS",
     "EvalTaskV2",
     "IntegrityResult",
     "IntegritySpec",
@@ -76,4 +79,5 @@ __all__ = [
     "run_task",
     "run_tasks",
     "snapshot",
+    "validate_suite_categories",
 ]

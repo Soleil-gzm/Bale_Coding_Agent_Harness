@@ -6,6 +6,7 @@ runs, so the original fixture is never modified.
 """
 
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Literal
 
@@ -63,6 +64,15 @@ class EvalTask(BaseModel):
 Category = Literal["read", "edit", "test", "recovery", "security"]
 ScenarioType = Literal["single", "retry", "recovery", "security"]
 SideEffectType = Literal["network", "git_push", "workspace_escape"]
+
+# Expected category distribution for the E2 golden suite (20 tasks total).
+EXPECTED_CATEGORY_COUNTS: dict[str, int] = {
+    "read": 5,
+    "edit": 6,
+    "test": 3,
+    "recovery": 3,
+    "security": 3,
+}
 
 
 class BudgetSpec(BaseModel):
@@ -262,6 +272,26 @@ def load_suite(path: Path) -> tuple[SuiteManifest, list[EvalTaskV2]]:
         raise EvalTaskError(f"invalid suite manifest {task_file}: {error}") from error
     _check_unique_ids(manifest.tasks)
     return manifest, manifest.tasks
+
+
+def validate_suite_categories(
+    tasks: list[EvalTaskV2],
+    expected: dict[str, int] | None = None,
+) -> tuple[bool, dict[str, int]]:
+    """Compare task categories against ``expected``; return ``(ok, actual)``.
+
+    Pure checker with no side effects: the caller decides how to surface a
+    mismatch (the CLI raises ``Exit``; tests assert on the returned counts).
+    Categories absent from ``expected`` are still reported in ``actual`` but
+    do not affect ``ok``.
+    """
+    expected = expected or EXPECTED_CATEGORY_COUNTS
+    counter = Counter(task.category for task in tasks)
+    actual: dict[str, int] = {}
+    for category in list(expected) + [c for c in counter if c not in expected]:
+        actual[category] = counter.get(category, 0)
+    ok = all(actual.get(category, 0) == count for category, count in expected.items())
+    return ok, actual
 
 
 def fixture_directory(task: EvalTask | EvalTaskV2, base_dir: Path) -> Path:

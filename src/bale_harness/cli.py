@@ -33,8 +33,16 @@ from bale_harness.agent.tools.mcp import (
 from bale_harness.agent.trace import JsonlTraceExporter, read_trace
 from bale_harness.contracts import ApprovalMode, Turn
 from bale_harness.eval.report import render_markdown
-from bale_harness.eval.runner import EvalReport, run_tasks
-from bale_harness.eval.task import EvalTaskError, load_tasks, resolve_task_file
+from bale_harness.eval.runner import EvalReport, preflight_task, run_tasks
+from bale_harness.eval.task import (
+    EXPECTED_CATEGORY_COUNTS,
+    EvalTaskError,
+    EvalTaskV2,
+    load_suite,
+    load_tasks,
+    resolve_task_file,
+    validate_suite_categories,
+)
 from bale_harness.providers import create_provider
 from bale_harness.repo_index import HybridIndex, create_embedder, create_retriever
 from bale_harness.settings import Settings
@@ -243,14 +251,35 @@ def search_command(
 @app.command("eval")
 def eval_command(
     tasks: Annotated[
-        Path,
+        Path | None,
         typer.Option(
-            ...,
             exists=True,
             readable=True,
-            help="JSON task file or directory containing tasks.json",
+            help="JSON task file or directory containing tasks.json (v1 or v2)",
         ),
-    ],
+    ] = None,
+    suite: Annotated[
+        Path | None,
+        typer.Option(
+            exists=True,
+            readable=True,
+            help="Versioned suite manifest (schema_version 2) with golden tasks",
+        ),
+    ] = None,
+    skip_preflight: Annotated[
+        bool,
+        typer.Option(
+            "--skip-preflight",
+            help="Skip data-quality preflight (F2P-fail / P2P-pass / gold-pass)",
+        ),
+    ] = False,
+    no_category_check: Annotated[
+        bool,
+        typer.Option(
+            "--no-category-check",
+            help="Skip the suite category distribution check (5/6/3/3/3)",
+        ),
+    ] = False,
     output: Annotated[
         Path | None, typer.Option(help="Write the Markdown report to this file")
     ] = None,
@@ -267,13 +296,50 @@ def eval_command(
     ] = None,
 ) -> None:
     """Run fixed evaluation tasks on fixture copies and verify their checks."""
+    if (tasks is None) == (suite is None):
+        raise typer.BadParameter("specify exactly one of --tasks or --suite")
     try:
-        task_list = load_tasks(tasks)
+        if suite is not None:
+            _manifest, task_list = load_suite(suite)
+            task_file = resolve_task_file(suite)
+            if not no_category_check:
+                ok_counts, actual = validate_suite_categories(task_list)
+                if not ok_counts:
+                    expected_summary = ", ".join(
+                        f"{c}={EXPECTED_CATEGORY_COUNTS[c]}"
+                        for c in EXPECTED_CATEGORY_COUNTS
+                    )
+                    actual_summary = ", ".join(
+                        f"{c}={actual.get(c, 0)}" for c in EXPECTED_CATEGORY_COUNTS
+                    )
+                    typer.echo(
+                        "suite category check failed\n"
+                        f"  expected: {expected_summary}\n"
+                        f"  actual:   {actual_summary}"
+                    )
+                    raise typer.Exit(code=1)
+        else:
+            task_list = load_tasks(tasks)  # type: ignore[arg-type]
+            task_file = resolve_task_file(tasks)  # type: ignore[arg-type]
     except EvalTaskError as error:
         raise typer.BadParameter(str(error)) from error
-    task_file = resolve_task_file(tasks)
     if not task_list:
         raise typer.BadParameter(f"no tasks in {task_file}")
+
+    if not skip_preflight:
+        base_dir = task_file.parent
+        failures: list[str] = []
+        for task in task_list:
+            if not isinstance(task, EvalTaskV2) or not task.gold_patch:
+                continue
+            result = preflight_task(task, base_dir)
+            if not result.ok:
+                failures.append(f"{task.id}: {result.error}")
+        if failures:
+            typer.echo("preflight failed:")
+            for failure in failures:
+                typer.echo(f"  - {failure}")
+            raise typer.Exit(code=1)
 
     settings = Settings()
     backend = sandbox or settings.sandbox_backend
