@@ -244,3 +244,47 @@ def test_eval_repeat_runs_each_task_twice(tmp_path: Path, monkeypatch) -> None:
     assert data["metrics"]["pass_at_1"] == 1.0
     repeat_indexes = {item["repeat_index"] for item in data["outcomes"]}
     assert repeat_indexes == {0, 1}
+
+
+def test_eval_compare_to_reports_unchanged_and_incomparable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("BALE_PROVIDER", "fake")
+    suite_path = _write_suite(tmp_path, _suite_tasks(VALID_COUNTS))
+    baseline_path = tmp_path / "baseline.json"
+
+    first = runner.invoke(
+        app, ["eval", "--suite", str(suite_path), "--json", str(baseline_path)]
+    )
+    assert first.exit_code == 0, first.output
+
+    same = runner.invoke(
+        app,
+        ["eval", "--suite", str(suite_path), "--compare-to", str(baseline_path)],
+    )
+    assert same.exit_code == 0, same.output
+    assert "comparison: unchanged" in same.output
+
+    suite_data = json.loads(suite_path.read_text(encoding="utf-8"))
+    suite_data["tasks"][0]["message"] += " changed"
+    suite_path.write_text(json.dumps(suite_data), encoding="utf-8")
+
+    drift = runner.invoke(
+        app,
+        ["eval", "--suite", str(suite_path), "--compare-to", str(baseline_path)],
+    )
+    assert drift.exit_code == 1
+    assert "comparison: incomparable" in drift.output
+    assert "dataset" in drift.output
+
+
+def test_eval_treatment_requires_compare_to(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BALE_PROVIDER", "fake")
+    suite_path = _write_suite(tmp_path, _suite_tasks(VALID_COUNTS))
+
+    result = runner.invoke(
+        app, ["eval", "--suite", str(suite_path), "--treatment", "model"]
+    )
+
+    assert result.exit_code != 0
+    assert "--treatment requires --compare-to" in result.output

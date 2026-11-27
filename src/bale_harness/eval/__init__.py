@@ -1,5 +1,12 @@
 """Fixed tasks, deterministic checks, and reports for offline evaluation."""
 
+from bale_harness.eval.compare import (
+    CategoryDelta,
+    Comparison,
+    ComparisonVerdict,
+    TaskPair,
+    compare_reports,
+)
 from bale_harness.eval.evidence import EvidenceLayout
 from bale_harness.eval.integrity import (
     IntegrityResult,
@@ -60,8 +67,11 @@ from bale_harness.eval.task import (
 
 __all__ = [
     "BudgetSpec",
+    "CategoryDelta",
     "Check",
     "CheckResult",
+    "Comparison",
+    "ComparisonVerdict",
     "DatasetFingerprint",
     "EvalManifest",
     "EvalMetrics",
@@ -89,9 +99,11 @@ __all__ = [
     "ScenarioSpec",
     "SuiteManifest",
     "TaskOutcome",
+    "TaskPair",
     "ToolFingerprint",
     "build_manifest",
     "check_integrity",
+    "compare_reports",
     "compute_metrics",
     "evaluate_checks",
     "evaluate_oracle",

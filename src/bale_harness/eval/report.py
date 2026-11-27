@@ -1,5 +1,6 @@
 """Markdown rendering for evaluation reports."""
 
+from bale_harness.eval.compare import Comparison
 from bale_harness.eval.metrics import EvalMetrics
 from bale_harness.eval.runner import EvalReport
 
@@ -79,6 +80,39 @@ def _metrics_section(metrics: EvalMetrics) -> list[str]:
     return lines
 
 
+def _comparison_section(comparison: Comparison) -> list[str]:
+    lines = [
+        "",
+        "## Comparison",
+        "",
+        f"- Verdict: **{comparison.verdict.value}**",
+        f"- Treatment: {comparison.treatment or 'none'}",
+        f"- Paired attempts: {comparison.sample_size}",
+    ]
+    if comparison.incompatible_reasons:
+        lines.append(
+            f"- Incomparable reasons: {', '.join(comparison.incompatible_reasons)}"
+        )
+    if comparison.new_passes:
+        lines.append(f"- Newly resolved: {', '.join(comparison.new_passes)}")
+    if comparison.new_failures:
+        lines.append(f"- Newly failing: {', '.join(comparison.new_failures)}")
+    if comparison.category_deltas:
+        lines.extend(
+            [
+                "",
+                "| Category | Baseline passed | Candidate passed | Delta |",
+                "| --- | --- | --- | --- |",
+            ]
+        )
+        for delta in comparison.category_deltas:
+            lines.append(
+                f"| {delta.category} | {delta.baseline_passed} "
+                f"| {delta.candidate_passed} | {delta.delta:+d} |"
+            )
+    return lines
+
+
 def render_markdown(report: EvalReport) -> str:
     """Render an :class:`EvalReport` as a self-contained Markdown document."""
     result = "PASS" if report.ok else "FAIL"
@@ -94,6 +128,9 @@ def render_markdown(report: EvalReport) -> str:
     ]
     if report.metrics is not None:
         lines.extend(_metrics_section(report.metrics))
+        lines.append("")
+    if report.comparison is not None:
+        lines.extend(_comparison_section(report.comparison))
         lines.append("")
     lines.extend(
         [

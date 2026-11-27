@@ -32,6 +32,7 @@ from bale_harness.agent.tools.mcp import (
 )
 from bale_harness.agent.trace import JsonlTraceExporter, read_trace
 from bale_harness.contracts import ApprovalMode, Turn
+from bale_harness.eval.compare import ComparisonVerdict, compare_reports
 from bale_harness.eval.evidence import EvidenceLayout, write_manifest, write_report
 from bale_harness.eval.manifest import build_manifest
 from bale_harness.eval.report import render_markdown
@@ -300,6 +301,25 @@ def eval_command(
             help="Run every task this many times (pass@k and stability checks)",
         ),
     ] = 1,
+    compare_to: Annotated[
+        Path | None,
+        typer.Option(
+            "--compare-to",
+            exists=True,
+            readable=True,
+            help="Baseline report JSON to compare this run against",
+        ),
+    ] = None,
+    treatment: Annotated[
+        str | None,
+        typer.Option(
+            "--treatment",
+            help=(
+                "Declared changed dimension: harness/model/prompt/tooling/"
+                "sandbox/dataset"
+            ),
+        ),
+    ] = None,
     output: Annotated[
         Path | None, typer.Option(help="Write the Markdown report to this file")
     ] = None,
@@ -318,6 +338,8 @@ def eval_command(
     """Run fixed evaluation tasks on fixture copies and verify their checks."""
     if (tasks is None) == (suite is None):
         raise typer.BadParameter("specify exactly one of --tasks or --suite")
+    if treatment is not None and compare_to is None:
+        raise typer.BadParameter("--treatment requires --compare-to")
     suite_name: str | None = None
     suite_version: str | None = None
     try:
@@ -412,6 +434,14 @@ def eval_command(
         suite_version=suite_version,
         repeat=repeat,
     )
+    if compare_to is not None:
+        try:
+            baseline = EvalReport.model_validate_json(
+                compare_to.read_text(encoding="utf-8")
+            )
+        except ValueError as error:
+            raise typer.BadParameter(f"invalid baseline report: {error}") from error
+        report.comparison = compare_reports(baseline, report, treatment)
     markdown = render_markdown(report)
     if layout is not None and report.manifest is not None:
         write_manifest(layout, report.manifest)
@@ -426,11 +456,23 @@ def eval_command(
         json_output.write_text(
             report.model_dump_json(indent=2, exclude_none=True), encoding="utf-8"
         )
+    if report.comparison is not None:
+        comparison = report.comparison
+        reasons = (
+            f" ({', '.join(comparison.incompatible_reasons)})"
+            if comparison.incompatible_reasons
+            else ""
+        )
+        typer.echo(f"comparison: {comparison.verdict.value}{reasons}")
     typer.echo(
         f"passed {report.passed}/{report.total} "
         f"(failed {report.failed}, errors {report.errors})"
     )
-    if not report.ok:
+    blocking = {ComparisonVerdict.INCOMPARABLE, ComparisonVerdict.REGRESSED}
+    comparison_blocks = (
+        report.comparison is not None and report.comparison.verdict in blocking
+    )
+    if not report.ok or comparison_blocks:
         raise typer.Exit(code=1)
 
 

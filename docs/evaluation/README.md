@@ -32,6 +32,20 @@ bale eval --suite examples/eval/golden/suite.json
 
 `--suite` 与 `--tasks` 互斥。suite 运行前会做分类数量校验，并对声明了 `gold_patch` 的任务执行数据质量 preflight（`--skip-preflight` 可跳过）。
 
+JSON 报告包含 `report_schema_version`、五元组指纹 `manifest`（model/prompt/tools/sandbox/dataset + git + flags）与 `metrics`（不可测指标为 `null` 并附 `coverage`）。常用参数：
+
+```bash
+# 重复 3 次，统计 pass@k
+bale eval --suite examples/eval/golden/suite.json --repeat 3
+
+# 持久化 manifest、报告与逐任务证据
+bale eval --suite examples/eval/golden/suite.json --artifacts-dir artifacts/eval/run-1
+
+# 与 baseline 配对比较；未声明维度不同时判为 incomparable 并退出 1
+bale eval --suite examples/eval/golden/suite.json \
+  --compare-to artifacts/eval/run-1/report.json
+```
+
 预期输出末尾：
 
 ```text

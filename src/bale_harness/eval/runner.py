@@ -29,6 +29,7 @@ from bale_harness.agent.loop import build_default_loop
 from bale_harness.agent.sandbox import Sandbox
 from bale_harness.agent.security import WorkspaceError, WorkspaceGuard
 from bale_harness.contracts import Turn
+from bale_harness.eval.compare import Comparison
 from bale_harness.eval.evidence import EvidenceLayout, write_task_evidence
 from bale_harness.eval.integrity import IntegrityResult, check_integrity, render_diff
 from bale_harness.eval.manifest import EvalManifest
@@ -142,6 +143,7 @@ class EvalReport(BaseModel):
     errors: int = Field(ge=0)
     outcomes: list[TaskOutcome] = Field(default_factory=list)
     metrics: EvalMetrics | None = None
+    comparison: Comparison | None = None
     manifest: EvalManifest | None = None
 
     @property
