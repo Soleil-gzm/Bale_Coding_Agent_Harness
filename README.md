@@ -42,7 +42,7 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 - `ContextBuilder` 生成 Turn 内稳定的系统前缀，并可注入上一条 completed Turn 的记忆摘要。
 - `TokenBudget` 与 `HistoryTrimmer` 按整 Turn 裁剪历史，压缩超长工具输出，同时保持 assistant 工具调用与 tool 结果配对。
 - `SessionStore` 使用标准库 SQLite 追加保存消息、Turn 状态、已执行调用和 `after_turn` 记忆；`bale run --session-db ... --session-id ...` 启用持久化。
-- 取消或中断后，`bale run --resume` 复用原始 user 消息继续执行；已提交的写操作不会重复执行，结果未知的调用会以 `outcome_unknown` 回注模型。
+- 取消或中断后，`bale run --resume` 复用原始 user 消息继续执行；只加载目标 Turn 的消息与已提交结果，已提交的写操作不会重复执行，结果未知的调用会以 `outcome_unknown` 回注模型。
 - `BALE_CONTEXT_WINDOW` 控制上下文窗口（默认 128000）；`turn.token_budget` 控制本 Turn 累计 token 上限，`turn.time_budget` 控制 wall-clock 秒数上限（`--time-budget` / HTTP `time_budget`）。
 
 ### 追踪与成本

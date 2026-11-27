@@ -83,7 +83,7 @@ flowchart LR
     Loop --> Result[RunResult JSON]
 ```
 
-审批语义：`auto_read` 只读放行、写/执行拒绝；`approve_write` 只读放行、写/执行需审批；`approve_all` 全部需审批。没有审批人时写/执行一律 `denied`，拒绝结果会回注模型而不是终止循环。写/执行工具的 `call_id` 幂等缓存按 `(call_id, name, 参数指纹)` 命中；B3 恢复时只播种当前 Turn 已提交的结果，避免跨 Turn 误用缓存。
+审批语义：`auto_read` 只读放行、写/执行拒绝；`approve_write` 只读放行、写/执行需审批；`approve_all` 全部需审批。没有审批人时写/执行一律 `denied`，拒绝结果会回注模型而不是终止循环。写/执行工具的 `call_id` 幂等缓存按 `(call_id, name, 参数指纹)` 命中；B3 恢复时只播种并加载目标 Turn 的消息与已提交结果，避免跨 Turn 误用缓存或用后续 Turn 的答案完成旧 Turn。
 
 | 当前模块 | 职责 | 边界 |
 |---|---|---|
