@@ -292,6 +292,14 @@ def eval_command(
             ),
         ),
     ] = None,
+    repeat: Annotated[
+        int,
+        typer.Option(
+            "--repeat",
+            min=1,
+            help="Run every task this many times (pass@k and stability checks)",
+        ),
+    ] = 1,
     output: Annotated[
         Path | None, typer.Option(help="Write the Markdown report to this file")
     ] = None,
@@ -391,6 +399,7 @@ def eval_command(
             lambda _task: create_provider(settings),
             sandbox_factory,
             evidence_root=layout.root if layout is not None else None,
+            repeat=repeat,
         )
     )
     report.manifest = build_manifest(
@@ -401,6 +410,7 @@ def eval_command(
         sandbox_image=image,
         suite=suite_name,
         suite_version=suite_version,
+        repeat=repeat,
     )
     markdown = render_markdown(report)
     if layout is not None and report.manifest is not None:

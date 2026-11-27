@@ -32,6 +32,7 @@ from bale_harness.contracts import Turn
 from bale_harness.eval.evidence import EvidenceLayout, write_task_evidence
 from bale_harness.eval.integrity import IntegrityResult, check_integrity, render_diff
 from bale_harness.eval.manifest import EvalManifest
+from bale_harness.eval.metrics import EvalMetrics, compute_metrics
 from bale_harness.eval.oracle import OracleEvaluation, build_eval_env, evaluate_oracle
 from bale_harness.eval.scenarios import run_scenario
 from bale_harness.eval.task import Check, EvalTask, EvalTaskV2, fixture_directory
@@ -111,6 +112,8 @@ class TaskOutcome(BaseModel):
 
     task_id: str
     description: str = ""
+    category: str | None = None
+    repeat_index: int = Field(default=0, ge=0)
     status: OutcomeStatus
     run_status: str | None = None
     answer: str | None = None
@@ -122,6 +125,7 @@ class TaskOutcome(BaseModel):
     check_results: list[CheckResult] = Field(default_factory=list)
     oracle: OracleOutcome | None = None
     integrity: IntegrityOutcome | None = None
+    contract_violations: list[str] = Field(default_factory=list)
 
 
 class EvalReport(BaseModel):
@@ -137,6 +141,7 @@ class EvalReport(BaseModel):
     failed: int = Field(ge=0)
     errors: int = Field(ge=0)
     outcomes: list[TaskOutcome] = Field(default_factory=list)
+    metrics: EvalMetrics | None = None
     manifest: EvalManifest | None = None
 
     @property
@@ -355,6 +360,7 @@ async def _run_v1_task(
         outcome = TaskOutcome(
             task_id=task.id,
             description=task.description,
+            category=None,
             status=status,
             run_status=result.status,
             answer=result.answer,
@@ -447,6 +453,7 @@ async def _run_v2_task(
         outcome = TaskOutcome(
             task_id=task.id,
             description=task.description,
+            category=task.category,
             status=status,
             run_status=scenario_result.run_status,
             answer=scenario_result.answer,
@@ -458,6 +465,7 @@ async def _run_v2_task(
             check_results=check_results,
             oracle=oracle_outcome,
             integrity=integrity_outcome,
+            contract_violations=list(scenario_result.contract_violations),
         )
         if evidence_dir is not None:
             write_task_evidence(
@@ -586,8 +594,9 @@ async def run_tasks(
     provider_factory: ProviderFactory | None = None,
     sandbox_factory: SandboxFactory | None = None,
     evidence_root: Path | None = None,
+    repeat: int = 1,
 ) -> EvalReport:
-    """Run tasks sequentially with a fresh provider and workspace per task."""
+    """Run tasks sequentially, each task ``repeat`` times, with fresh workspaces."""
     factory: ProviderFactory = provider_factory or (lambda task: FakeProvider())
     layout = EvidenceLayout(evidence_root) if evidence_root is not None else None
     started = time.perf_counter()
@@ -596,18 +605,23 @@ async def run_tasks(
     for task in tasks:
         fixture = fixture_directory(task, base_dir)
         if not fixture.is_dir():
-            outcomes.append(
+            outcomes.extend(
                 TaskOutcome(
                     task_id=task.id,
                     description=task.description,
+                    category=getattr(task, "category", None),
+                    repeat_index=repeat_index,
                     status="error",
                     error=f"fixture not found: {fixture}",
                 )
+                for repeat_index in range(repeat)
             )
             continue
-        evidence_dir = layout.task_dir(task.id) if layout is not None else None
-        outcomes.append(
-            await run_task(
+        for repeat_index in range(repeat):
+            evidence_dir = (
+                layout.task_dir(task.id, repeat_index) if layout is not None else None
+            )
+            outcome = await run_task(
                 task,
                 fixture,
                 factory(task),
@@ -615,12 +629,13 @@ async def run_tasks(
                 base_dir,
                 evidence_dir,
             )
-        )
+            outcome.repeat_index = repeat_index
+            outcomes.append(outcome)
 
     passed = sum(1 for outcome in outcomes if outcome.status == "passed")
     failed = sum(1 for outcome in outcomes if outcome.status == "failed")
     errors = sum(1 for outcome in outcomes if outcome.status == "error")
-    return EvalReport(
+    report = EvalReport(
         started_at=started_at,
         duration_ms=_elapsed_ms(started),
         total=len(outcomes),
@@ -629,3 +644,5 @@ async def run_tasks(
         errors=errors,
         outcomes=outcomes,
     )
+    report.metrics = compute_metrics(report)
+    return report

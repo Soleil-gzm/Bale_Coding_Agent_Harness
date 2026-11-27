@@ -1,5 +1,6 @@
 """Markdown rendering for evaluation reports."""
 
+from bale_harness.eval.metrics import EvalMetrics
 from bale_harness.eval.runner import EvalReport
 
 
@@ -14,6 +15,70 @@ def _marker(passed: bool) -> str:
     return "PASS" if passed else "FAIL"
 
 
+def _metric_value(value: float | int | None) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, float):
+        return f"{value:.3f}"
+    return str(value)
+
+
+def _metrics_section(metrics: EvalMetrics) -> list[str]:
+    coverage = metrics.coverage
+    rows = [
+        ("scheduled attempts", _metric_value(metrics.scheduled), "all task runs"),
+        ("resolved", _metric_value(metrics.resolved), "status == passed"),
+        ("resolve rate", _metric_value(metrics.resolve_rate), "resolved / scheduled"),
+        ("pass@1", _metric_value(metrics.pass_at_1), "first attempt per task"),
+        (
+            "pass@k",
+            _metric_value(metrics.pass_at_k),
+            coverage.get("pass_at_k", "any attempt per task"),
+        ),
+        (
+            "test cheating rate",
+            _metric_value(metrics.test_cheating_rate),
+            "cheating/forbidden codes",
+        ),
+        (
+            "security violation rate",
+            _metric_value(metrics.security_violation_rate),
+            coverage.get("security_violation_rate", "security attempts"),
+        ),
+        (
+            "infrastructure error rate",
+            _metric_value(metrics.infrastructure_error_rate),
+            "status == error",
+        ),
+        (
+            "duration p95 (ms)",
+            _metric_value(metrics.duration_p95_ms),
+            f"n={metrics.sample_size}",
+        ),
+    ]
+    for name, value, note in (
+        ("cost per success", metrics.cost_per_success, coverage["cost_per_success"]),
+        ("regression rate", metrics.regression_rate, coverage["regression_rate"]),
+        (
+            "repeated call rate",
+            metrics.repeated_call_rate,
+            coverage["repeated_call_rate"],
+        ),
+    ):
+        rows.append((name, _metric_value(value), note))
+
+    lines = [
+        "",
+        "## Metrics",
+        "",
+        "| Metric | Value | Coverage |",
+        "| --- | --- | --- |",
+    ]
+    for name, value, note in rows:
+        lines.append(f"| {name} | {value} | {_cell(note)} |")
+    return lines
+
+
 def render_markdown(report: EvalReport) -> str:
     """Render an :class:`EvalReport` as a self-contained Markdown document."""
     result = "PASS" if report.ok else "FAIL"
@@ -26,9 +91,16 @@ def render_markdown(report: EvalReport) -> str:
         f"failed {report.failed}, errors {report.errors})",
         f"- Result: {result}",
         "",
-        "| Task | Status | Run | Iterations | Tools | Tokens | Checks |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
+    if report.metrics is not None:
+        lines.extend(_metrics_section(report.metrics))
+        lines.append("")
+    lines.extend(
+        [
+            "| Task | Status | Run | Iterations | Tools | Tokens | Checks |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    )
     for outcome in report.outcomes:
         checks = outcome.check_results
         check_summary = f"{sum(1 for item in checks if item.passed)}/{len(checks)}"

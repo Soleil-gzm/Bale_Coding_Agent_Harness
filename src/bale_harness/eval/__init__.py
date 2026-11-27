@@ -20,6 +20,7 @@ from bale_harness.eval.manifest import (
     build_manifest,
     hash_dataset,
 )
+from bale_harness.eval.metrics import EvalMetrics, compute_metrics
 from bale_harness.eval.oracle import (
     OracleError,
     OracleEvaluation,
@@ -63,6 +64,7 @@ __all__ = [
     "CheckResult",
     "DatasetFingerprint",
     "EvalManifest",
+    "EvalMetrics",
     "EvalReport",
     "EvalTask",
     "EvalTaskError",
@@ -90,6 +92,7 @@ __all__ = [
     "ToolFingerprint",
     "build_manifest",
     "check_integrity",
+    "compute_metrics",
     "evaluate_checks",
     "evaluate_oracle",
     "hash_dataset",

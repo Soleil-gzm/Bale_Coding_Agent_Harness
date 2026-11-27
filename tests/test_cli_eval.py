@@ -216,3 +216,31 @@ def test_eval_artifacts_dir_persists_evidence(tmp_path: Path, monkeypatch) -> No
     assert report["manifest"]["run_id"] == manifest["run_id"]
     assert (artifacts / "report.md").is_file()
     assert (artifacts / "tasks" / "task-1" / "0" / "outcome.json").is_file()
+
+
+def test_eval_repeat_runs_each_task_twice(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BALE_PROVIDER", "fake")
+    suite_path = _write_suite(tmp_path, _suite_tasks(VALID_COUNTS))
+    json_path = tmp_path / "repeat.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "eval",
+            "--suite",
+            str(suite_path),
+            "--repeat",
+            "2",
+            "--json",
+            str(json_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    assert data["total"] == 40
+    assert data["manifest"]["repeat"] == 2
+    assert data["metrics"]["pass_at_k"] == 1.0
+    assert data["metrics"]["pass_at_1"] == 1.0
+    repeat_indexes = {item["repeat_index"] for item in data["outcomes"]}
+    assert repeat_indexes == {0, 1}
