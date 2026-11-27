@@ -16,7 +16,7 @@ venv/
 .ruff_cache/
 .coverage
 htmlcov/
-
+.trae/
 # Runtime data and generated traces
 output/
 data/
