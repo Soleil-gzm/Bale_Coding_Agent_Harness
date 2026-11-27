@@ -1,5 +1,10 @@
 """Fixed tasks, deterministic checks, and reports for offline evaluation."""
 
+from bale_harness.eval.baseline import (
+    DEFAULT_BASELINE_DIR,
+    BaselineError,
+    freeze_baseline,
+)
 from bale_harness.eval.compare import (
     CategoryDelta,
     Comparison,
@@ -66,6 +71,8 @@ from bale_harness.eval.task import (
 )
 
 __all__ = [
+    "DEFAULT_BASELINE_DIR",
+    "BaselineError",
     "BudgetSpec",
     "CategoryDelta",
     "Check",
@@ -110,6 +117,7 @@ __all__ = [
     "hash_dataset",
     "parse_junit",
     "preflight_task",
+    "freeze_baseline",
     "fixture_directory",
     "render_diff",
     "load_suite",

@@ -377,3 +377,100 @@ def test_eval_local_with_allow_local_runs(tmp_path: Path, monkeypatch) -> None:
     )
 
     assert result.exit_code == 0, result.output
+
+
+def test_eval_validate_only_skips_execution(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BALE_PROVIDER", "fake")
+    suite_path = _write_suite(tmp_path, _suite_tasks(VALID_COUNTS))
+
+    result = runner.invoke(app, ["eval", "--suite", str(suite_path), "--validate-only"])
+
+    assert result.exit_code == 0, result.output
+    assert "validate-only" in result.output
+    assert "checks passed" in result.output
+
+
+def test_eval_provider_override_switches_to_fake(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BALE_PROVIDER", "openai")
+    monkeypatch.setenv("BALE_OPENAI_API_KEY", "dummy")
+    monkeypatch.setenv("BALE_OPENAI_BASE_URL", "http://localhost:11434")
+    suite_path = _write_suite(tmp_path, _suite_tasks(VALID_COUNTS))
+    json_path = tmp_path / "report.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "eval",
+            "--allow-local",
+            "--suite",
+            str(suite_path),
+            "--provider",
+            "fake",
+            "--json",
+            str(json_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    assert data["manifest"]["model"]["provider"] == "fake"
+
+
+def test_eval_freeze_baseline_invokes_freeze(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BALE_PROVIDER", "fake")
+    suite_path = _write_suite(tmp_path, _suite_tasks(VALID_COUNTS))
+    baseline_dir = tmp_path / "baselines"
+    calls: dict[str, object] = {}
+
+    def fake_freeze(report, name, **kwargs):  # noqa: ANN001
+        calls["name"] = name
+        calls["kwargs"] = kwargs
+        return baseline_dir / f"{name}.json"
+
+    monkeypatch.setattr("bale_harness.cli.freeze_baseline", fake_freeze)
+
+    result = runner.invoke(
+        app,
+        [
+            "eval",
+            "--allow-local",
+            "--suite",
+            str(suite_path),
+            "--freeze-baseline",
+            "golden-v1",
+            "--baseline-dir",
+            str(baseline_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls["name"] == "golden-v1"
+    assert calls["kwargs"]["supersede"] is False
+    assert calls["kwargs"]["baseline_dir"] == baseline_dir
+
+
+def test_eval_freeze_baseline_error_aborts(tmp_path: Path, monkeypatch) -> None:
+    from bale_harness.eval.baseline import BaselineError
+
+    monkeypatch.setenv("BALE_PROVIDER", "fake")
+    suite_path = _write_suite(tmp_path, _suite_tasks(VALID_COUNTS))
+
+    def fake_freeze(report, name, **kwargs):  # noqa: ANN001
+        raise BaselineError("boom")
+
+    monkeypatch.setattr("bale_harness.cli.freeze_baseline", fake_freeze)
+
+    result = runner.invoke(
+        app,
+        [
+            "eval",
+            "--allow-local",
+            "--suite",
+            str(suite_path),
+            "--freeze-baseline",
+            "golden-v1",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "boom" in result.output

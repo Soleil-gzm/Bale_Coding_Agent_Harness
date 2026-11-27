@@ -32,6 +32,11 @@ from bale_harness.agent.tools.mcp import (
 )
 from bale_harness.agent.trace import JsonlTraceExporter, read_trace
 from bale_harness.contracts import ApprovalMode, Turn
+from bale_harness.eval.baseline import (
+    DEFAULT_BASELINE_DIR,
+    BaselineError,
+    freeze_baseline,
+)
 from bale_harness.eval.compare import ComparisonVerdict, compare_reports
 from bale_harness.eval.evidence import EvidenceLayout, write_manifest, write_report
 from bale_harness.eval.manifest import build_manifest
@@ -336,6 +341,48 @@ def eval_command(
             help="Permit the non-hermetic local sandbox (marks hermetic=false)",
         ),
     ] = False,
+    provider: Annotated[
+        str | None,
+        typer.Option(
+            "--provider",
+            help="Override BALE_PROVIDER for this run ('fake' or 'openai')",
+        ),
+    ] = None,
+    validate_only: Annotated[
+        bool,
+        typer.Option(
+            "--validate-only",
+            help="Run suite/category/preflight checks only; do not execute tasks",
+        ),
+    ] = False,
+    freeze_baseline_name: Annotated[
+        str | None,
+        typer.Option(
+            "--freeze-baseline",
+            help="Freeze this run's report as the named baseline (no overwrite)",
+        ),
+    ] = None,
+    supersede_baseline: Annotated[
+        bool,
+        typer.Option(
+            "--supersede-baseline",
+            help="Allow --freeze-baseline to replace an existing baseline",
+        ),
+    ] = False,
+    baseline_reason: Annotated[
+        str | None,
+        typer.Option(
+            "--baseline-reason",
+            help="Reason recorded when superseding an existing baseline",
+        ),
+    ] = None,
+    baseline_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--baseline-dir",
+            help="Directory for frozen baselines (default docs/evaluation/baselines)",
+        ),
+    ] = None,
 ) -> None:
     """Run fixed evaluation tasks on fixture copies and verify their checks."""
     if (tasks is None) == (suite is None):
@@ -392,7 +439,19 @@ def eval_command(
                 typer.echo(f"  - {failure}")
             raise typer.Exit(code=1)
 
+    if validate_only:
+        typer.echo("validate-only: suite, category, and preflight checks passed")
+        raise typer.Exit(code=0)
+
     settings = Settings()
+    if provider is not None:
+        if provider not in {"fake", "openai"}:
+            raise typer.BadParameter("--provider must be 'fake' or 'openai'")
+        try:
+            settings = settings.model_copy(update={"provider": provider})
+            settings = settings.validate_provider_credentials()
+        except ValueError as error:
+            raise typer.BadParameter(str(error)) from error
     backend = sandbox or settings.sandbox_backend
     if backend not in {"local", "docker"}:
         raise typer.BadParameter(
@@ -470,6 +529,18 @@ def eval_command(
         except ValueError as error:
             raise typer.BadParameter(f"invalid baseline report: {error}") from error
         report.comparison = compare_reports(baseline, report, treatment)
+    if freeze_baseline_name is not None:
+        try:
+            written = freeze_baseline(
+                report,
+                freeze_baseline_name,
+                baseline_dir=baseline_dir or DEFAULT_BASELINE_DIR,
+                supersede=supersede_baseline,
+                supersede_reason=baseline_reason,
+            )
+        except BaselineError as error:
+            raise typer.BadParameter(str(error)) from error
+        typer.echo(f"frozen baseline {freeze_baseline_name!r} -> {written}")
     markdown = render_markdown(report)
     if layout is not None and report.manifest is not None:
         write_manifest(layout, report.manifest)
