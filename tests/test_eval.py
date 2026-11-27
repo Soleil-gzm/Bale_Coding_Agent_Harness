@@ -269,6 +269,7 @@ def test_cli_eval_writes_reports_and_fails_on_checks(
         app,
         [
             "eval",
+            "--allow-local",
             "--tasks",
             str(tasks_file),
             "--output",

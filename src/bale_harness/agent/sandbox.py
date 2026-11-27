@@ -169,6 +169,11 @@ class LocalSandbox:
     def python_executable(self) -> str:
         return sys.executable
 
+    @property
+    def image_digest(self) -> None:
+        """Local execution has no pinned image digest."""
+        return None
+
     def _build_env(self, extra_env: dict[str, str] | None) -> dict[str, str]:
         env = {
             key: value
@@ -241,6 +246,25 @@ class LocalSandbox:
         )
 
 
+def parse_docker_inspect(stdout: str) -> str | None:
+    """Extract an image digest from ``docker image inspect`` output.
+
+    Accepts the ``{{.Id}}`` format (``sha256:<hex>``) or a repo digest
+    (``name@sha256:<hex>``). Returns ``None`` when no digest is present so a
+    failed lookup never blocks command execution.
+    """
+    text = (stdout or "").strip()
+    if not text:
+        return None
+    for line in text.splitlines():
+        candidate = line.strip()
+        if "@sha256:" in candidate:
+            return candidate.split("@", 1)[1]
+        if candidate.startswith("sha256:"):
+            return candidate
+    return None
+
+
 DEFAULT_DOCKER_IMAGE = "python:3.11-slim"
 DOCKER_WORKSPACE = "/workspace"
 
@@ -275,10 +299,42 @@ class DockerSandbox:
         self._pids_limit = pids_limit
         self._user = user
         self._docker_bin = docker_bin
+        self._image_digest: str | None = None
+        self._image_digest_loaded: bool = False
 
     @property
     def python_executable(self) -> str:
         return "python"
+
+    @property
+    def image_digest(self) -> str | None:
+        """Resolve the image digest once; lookup failures stay ``None``."""
+        if not self._image_digest_loaded:
+            self._image_digest = self._resolve_image_digest()
+            self._image_digest_loaded = True
+        return self._image_digest
+
+    def _resolve_image_digest(self) -> str | None:
+        try:
+            completed = subprocess.run(
+                [
+                    self._docker_bin,
+                    "image",
+                    "inspect",
+                    "--format",
+                    "{{.Id}}",
+                    self._image,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if completed.returncode != 0:
+            return None
+        return parse_docker_inspect(completed.stdout)
 
     def _require_docker(self) -> None:
         if shutil.which(self._docker_bin) is not None:

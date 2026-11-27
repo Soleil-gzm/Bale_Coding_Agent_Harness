@@ -109,6 +109,8 @@ class EvalManifest(BaseModel):
     sandbox: SandboxFingerprint
     dataset: DatasetFingerprint
     feature_flags: dict[str, str | int | bool | float] = Field(default_factory=dict)
+    hermetic: bool = False
+    oracle_execution: str = "host"
 
     def comparability_fields(self) -> dict[str, str]:
         """Flatten the fields a baseline comparison must match."""
@@ -123,7 +125,8 @@ class EvalManifest(BaseModel):
             "sandbox": (
                 f"{self.sandbox.backend}:{self.sandbox.image}:"
                 f"{self.sandbox.network}:{self.sandbox.memory}:"
-                f"{self.sandbox.cpus}:{self.sandbox.pids_limit}:{self.sandbox.user}"
+                f"{self.sandbox.cpus}:{self.sandbox.pids_limit}:{self.sandbox.user}:"
+                f"{self.sandbox.image_digest or ''}"
             ),
         }
 
@@ -235,16 +238,22 @@ def _git_fingerprint(base_dir: Path) -> GitFingerprint:
 
 
 def _sandbox_fingerprint(
-    settings: Settings, backend: str, image: str
+    settings: Settings,
+    backend: str,
+    image: str,
+    *,
+    network: bool | None = None,
+    image_digest: str | None = None,
 ) -> SandboxFingerprint:
     return SandboxFingerprint(
         backend=backend,
         image=image,
-        network=settings.sandbox_network,
+        network=settings.sandbox_network if network is None else network,
         memory=settings.sandbox_memory,
         cpus=settings.sandbox_cpus,
         pids_limit=settings.sandbox_pids_limit,
         user=settings.sandbox_user,
+        image_digest=image_digest,
     )
 
 
@@ -285,6 +294,10 @@ def build_manifest(
     suite_version: str | None = None,
     repeat: int = 1,
     run_id: str | None = None,
+    network: bool | None = None,
+    image_digest: str | None = None,
+    hermetic: bool | None = None,
+    oracle_execution: str = "host",
 ) -> EvalManifest:
     """Assemble the fingerprint set for a run over ``tasks`` under ``base_dir``."""
     dataset = hash_dataset(tasks, base_dir)
@@ -294,6 +307,14 @@ def build_manifest(
         dataset = dataset.model_copy(update={"suite_version": suite_version})
     backend = sandbox_backend or settings.sandbox_backend
     image = sandbox_image or settings.sandbox_image
+    resolved_network = settings.sandbox_network if network is None else network
+    git_fingerprint = _git_fingerprint(base_dir)
+    if hermetic is None:
+        hermetic = (
+            backend == "docker"
+            and resolved_network is False
+            and git_fingerprint.dirty is False
+        )
     resolved_run_id = run_id or (
         datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + dataset.content_sha256[:8]
     )
@@ -302,11 +323,19 @@ def build_manifest(
         created_at=datetime.now(UTC).isoformat(),
         task_count=len(tasks),
         repeat=repeat,
-        git=_git_fingerprint(base_dir),
+        git=git_fingerprint,
         model=_model_fingerprint(settings),
         prompt=_prompt_fingerprint(tasks),
         tools=_tool_fingerprint(),
-        sandbox=_sandbox_fingerprint(settings, backend, image),
+        sandbox=_sandbox_fingerprint(
+            settings,
+            backend,
+            image,
+            network=resolved_network,
+            image_digest=image_digest,
+        ),
         dataset=dataset,
         feature_flags=_feature_flags(settings),
+        hermetic=hermetic,
+        oracle_execution=oracle_execution,
     )

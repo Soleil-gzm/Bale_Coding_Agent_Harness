@@ -334,6 +334,13 @@ def eval_command(
         str | None,
         typer.Option("--sandbox-image", help="Container image for the docker sandbox"),
     ] = None,
+    allow_local: Annotated[
+        bool,
+        typer.Option(
+            "--allow-local",
+            help="Permit the non-hermetic local sandbox (marks hermetic=false)",
+        ),
+    ] = False,
 ) -> None:
     """Run fixed evaluation tasks on fixture copies and verify their checks."""
     if (tasks is None) == (suite is None):
@@ -393,18 +400,37 @@ def eval_command(
         raise typer.BadParameter(
             f"unsupported sandbox {backend!r}; use 'local' or 'docker'"
         )
+    if backend == "local" and not allow_local:
+        raise typer.BadParameter(
+            "local sandbox is not hermetic; pass --allow-local to opt in"
+        )
     if backend == "docker" and shutil.which("docker") is None:
         raise typer.BadParameter(
             "docker executable not found; install Docker or use --sandbox local"
         )
     image = sandbox_image or settings.sandbox_image
+    # Docker eval runs are forced off-network; local keeps the settings value.
+    eval_network = False if backend == "docker" else settings.sandbox_network
+    image_digest: str | None = None
+    if backend == "docker":
+        probe = create_sandbox(
+            "docker",
+            task_file.parent,
+            image=image,
+            network=False,
+            memory=settings.sandbox_memory,
+            cpus=settings.sandbox_cpus,
+            pids_limit=settings.sandbox_pids_limit,
+            user=settings.sandbox_user,
+        )
+        image_digest = probe.image_digest
 
     def sandbox_factory(workspace: Path) -> Sandbox:
         return create_sandbox(
             backend,
             workspace,
             image=image,
-            network=settings.sandbox_network,
+            network=eval_network,
             memory=settings.sandbox_memory,
             cpus=settings.sandbox_cpus,
             pids_limit=settings.sandbox_pids_limit,
@@ -433,6 +459,8 @@ def eval_command(
         suite=suite_name,
         suite_version=suite_version,
         repeat=repeat,
+        network=eval_network,
+        image_digest=image_digest,
     )
     if compare_to is not None:
         try:

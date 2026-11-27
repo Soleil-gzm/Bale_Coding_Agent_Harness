@@ -78,7 +78,7 @@ def test_eval_suite_runs_with_fake_provider(tmp_path: Path, monkeypatch) -> None
     monkeypatch.setenv("BALE_PROVIDER", "fake")
     suite_path = _write_suite(tmp_path, _suite_tasks(VALID_COUNTS))
 
-    result = runner.invoke(app, ["eval", "--suite", str(suite_path)])
+    result = runner.invoke(app, ["eval", "--allow-local", "--suite", str(suite_path)])
 
     assert result.exit_code == 0, result.output
     assert "category check failed" not in result.output
@@ -91,7 +91,7 @@ def test_eval_suite_rejects_wrong_category_counts(tmp_path: Path, monkeypatch) -
     bad_counts["read"] = 4  # one short
     suite_path = _write_suite(tmp_path, _suite_tasks(bad_counts))
 
-    result = runner.invoke(app, ["eval", "--suite", str(suite_path)])
+    result = runner.invoke(app, ["eval", "--allow-local", "--suite", str(suite_path)])
 
     assert result.exit_code != 0
     assert "category check failed" in result.output
@@ -105,7 +105,14 @@ def test_eval_suite_category_check_skippable(tmp_path: Path, monkeypatch) -> Non
     suite_path = _write_suite(tmp_path, _suite_tasks(bad_counts))
 
     result = runner.invoke(
-        app, ["eval", "--suite", str(suite_path), "--no-category-check"]
+        app,
+        [
+            "eval",
+            "--allow-local",
+            "--suite",
+            str(suite_path),
+            "--no-category-check",
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -161,6 +168,7 @@ def test_eval_skip_preflight_runs(tmp_path: Path, monkeypatch) -> None:
         app,
         [
             "eval",
+            "--allow-local",
             "--suite",
             str(suite_path),
             "--no-category-check",
@@ -176,7 +184,10 @@ def test_eval_tasks_v1_unchanged(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("BALE_PROVIDER", "fake")
     tasks_path = _write_v1_tasks(tmp_path)
 
-    result = runner.invoke(app, ["eval", "--tasks", str(tasks_path)])
+    result = runner.invoke(
+        app,
+        ["eval", "--allow-local", "--tasks", str(tasks_path)],
+    )
 
     assert result.exit_code == 0, result.output
     assert "category check failed" not in result.output
@@ -189,7 +200,15 @@ def test_eval_json_includes_manifest(tmp_path: Path, monkeypatch) -> None:
     json_path = tmp_path / "report.json"
 
     result = runner.invoke(
-        app, ["eval", "--suite", str(suite_path), "--json", str(json_path)]
+        app,
+        [
+            "eval",
+            "--allow-local",
+            "--suite",
+            str(suite_path),
+            "--json",
+            str(json_path),
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -207,7 +226,15 @@ def test_eval_artifacts_dir_persists_evidence(tmp_path: Path, monkeypatch) -> No
     artifacts = tmp_path / "artifacts"
 
     result = runner.invoke(
-        app, ["eval", "--suite", str(suite_path), "--artifacts-dir", str(artifacts)]
+        app,
+        [
+            "eval",
+            "--allow-local",
+            "--suite",
+            str(suite_path),
+            "--artifacts-dir",
+            str(artifacts),
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -227,6 +254,7 @@ def test_eval_repeat_runs_each_task_twice(tmp_path: Path, monkeypatch) -> None:
         app,
         [
             "eval",
+            "--allow-local",
             "--suite",
             str(suite_path),
             "--repeat",
@@ -254,13 +282,28 @@ def test_eval_compare_to_reports_unchanged_and_incomparable(
     baseline_path = tmp_path / "baseline.json"
 
     first = runner.invoke(
-        app, ["eval", "--suite", str(suite_path), "--json", str(baseline_path)]
+        app,
+        [
+            "eval",
+            "--allow-local",
+            "--suite",
+            str(suite_path),
+            "--json",
+            str(baseline_path),
+        ],
     )
     assert first.exit_code == 0, first.output
 
     same = runner.invoke(
         app,
-        ["eval", "--suite", str(suite_path), "--compare-to", str(baseline_path)],
+        [
+            "eval",
+            "--allow-local",
+            "--suite",
+            str(suite_path),
+            "--compare-to",
+            str(baseline_path),
+        ],
     )
     assert same.exit_code == 0, same.output
     assert "comparison: unchanged" in same.output
@@ -271,7 +314,14 @@ def test_eval_compare_to_reports_unchanged_and_incomparable(
 
     drift = runner.invoke(
         app,
-        ["eval", "--suite", str(suite_path), "--compare-to", str(baseline_path)],
+        [
+            "eval",
+            "--allow-local",
+            "--suite",
+            str(suite_path),
+            "--compare-to",
+            str(baseline_path),
+        ],
     )
     assert drift.exit_code == 1
     assert "comparison: incomparable" in drift.output
@@ -283,8 +333,47 @@ def test_eval_treatment_requires_compare_to(tmp_path: Path, monkeypatch) -> None
     suite_path = _write_suite(tmp_path, _suite_tasks(VALID_COUNTS))
 
     result = runner.invoke(
-        app, ["eval", "--suite", str(suite_path), "--treatment", "model"]
+        app,
+        [
+            "eval",
+            "--allow-local",
+            "--suite",
+            str(suite_path),
+            "--treatment",
+            "model",
+        ],
     )
 
     assert result.exit_code != 0
     assert "--treatment requires --compare-to" in result.output
+
+
+def test_eval_local_requires_allow_local(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BALE_PROVIDER", "fake")
+    suite_path = _write_suite(tmp_path, _suite_tasks(VALID_COUNTS))
+
+    result = runner.invoke(
+        app, ["eval", "--suite", str(suite_path), "--sandbox", "local"]
+    )
+
+    assert result.exit_code != 0
+    assert "--allow-local" in result.output
+
+
+def test_eval_local_with_allow_local_runs(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BALE_PROVIDER", "fake")
+    suite_path = _write_suite(tmp_path, _suite_tasks(VALID_COUNTS))
+
+    result = runner.invoke(
+        app,
+        [
+            "eval",
+            "--suite",
+            str(suite_path),
+            "--sandbox",
+            "local",
+            "--allow-local",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output

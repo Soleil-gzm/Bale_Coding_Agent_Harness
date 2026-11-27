@@ -6,6 +6,7 @@ from pathlib import Path
 
 from bale_harness.eval import (
     EvalReport,
+    EvalTask,
     build_manifest,
     hash_dataset,
     load_suite,
@@ -125,3 +126,52 @@ def test_git_fingerprint_tolerates_missing_or_dirty_tree() -> None:
     assert manifest.git.commit is None or len(manifest.git.commit) == 40
     assert manifest.git.dirty in {True, False, None}
     assert "python" in manifest.feature_flags
+
+
+def test_manifest_records_image_digest_and_oracle_execution(tmp_path: Path) -> None:
+    task = {"id": "t1", "fixture": "f1", "message": "do t1", "checks": []}
+    (tmp_path / "tasks.json").write_text(json.dumps([task]), encoding="utf-8")
+    tasks = [EvalTask.model_validate(task)]
+    manifest = build_manifest(
+        tasks,
+        tmp_path,
+        Settings(),
+        sandbox_backend="docker",
+        image_digest="sha256:abcdef",
+        network=False,
+    )
+    assert manifest.sandbox.image_digest == "sha256:abcdef"
+    assert manifest.sandbox.network is False
+    assert manifest.oracle_execution == "host"
+
+
+def test_manifest_hermetic_is_false_outside_git(tmp_path: Path) -> None:
+    task = {"id": "t1", "fixture": "f1", "message": "do t1", "checks": []}
+    (tmp_path / "tasks.json").write_text(json.dumps([task]), encoding="utf-8")
+    tasks = [EvalTask.model_validate(task)]
+    # tmp_path is not a git worktree -> dirty is None -> not hermetic.
+    manifest = build_manifest(
+        tasks, tmp_path, Settings(), sandbox_backend="docker", network=False
+    )
+    assert manifest.hermetic is False
+    overridden = build_manifest(
+        tasks, tmp_path, Settings(), sandbox_backend="docker", hermetic=True
+    )
+    assert overridden.hermetic is True
+
+
+def test_comparability_sandbox_includes_image_digest(tmp_path: Path) -> None:
+    task = {"id": "t1", "fixture": "f1", "message": "do t1", "checks": []}
+    (tmp_path / "tasks.json").write_text(json.dumps([task]), encoding="utf-8")
+    tasks = [EvalTask.model_validate(task)]
+    left = build_manifest(
+        tasks, tmp_path, Settings(), sandbox_backend="docker", image_digest="sha256:aaa"
+    )
+    right = build_manifest(
+        tasks, tmp_path, Settings(), sandbox_backend="docker", image_digest="sha256:bbb"
+    )
+    left_sandbox = left.comparability_fields()["sandbox"]
+    right_sandbox = right.comparability_fields()["sandbox"]
+    assert left_sandbox != right_sandbox
+    assert "sha256:aaa" in left_sandbox
+    assert "sha256:bbb" in right_sandbox

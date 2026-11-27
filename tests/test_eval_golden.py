@@ -155,7 +155,16 @@ def test_recovery_tasks_use_interrupt_scenarios() -> None:
 
 def _run_golden_cli(monkeypatch) -> object:
     monkeypatch.setenv("BALE_PROVIDER", "fake")
-    return CLI.invoke(app, ["eval", "--suite", str(SUITE_PATH), "--skip-preflight"])
+    return CLI.invoke(
+        app,
+        [
+            "eval",
+            "--allow-local",
+            "--suite",
+            str(SUITE_PATH),
+            "--skip-preflight",
+        ],
+    )
 
 
 def test_cli_golden_suite_structural_regression(monkeypatch) -> None:

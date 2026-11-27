@@ -1,6 +1,7 @@
 import asyncio
 import os
 import shutil
+import types
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,12 @@ import pytest
 from bale_harness.agent.approval import auto_approve
 from bale_harness.agent.loop import build_default_loop
 from bale_harness.agent.messages import ModelResponse, ToolCall
-from bale_harness.agent.sandbox import DockerSandbox, SandboxViolation
+from bale_harness.agent.sandbox import (
+    DockerSandbox,
+    LocalSandbox,
+    SandboxViolation,
+    parse_docker_inspect,
+)
 from bale_harness.contracts import Turn
 from bale_harness.providers import FakeProvider
 
@@ -198,3 +204,42 @@ def test_agent_loop_runs_shell_in_docker(tmp_path: Path) -> None:
         message.role == "tool" and "sandbox-ok" in message.content
         for message in second_prompt
     )
+
+
+def test_parse_docker_inspect_extracts_digest() -> None:
+    assert parse_docker_inspect("sha256:deadbeef") == "sha256:deadbeef"
+    assert parse_docker_inspect("python:3.11-slim@sha256:abc\n") == "sha256:abc"
+    assert parse_docker_inspect("") is None
+    assert parse_docker_inspect("garbage output") is None
+
+
+def test_docker_sandbox_image_digest_resolves_and_caches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple] = []
+
+    def fake_run(*args: object, **kwargs: object) -> object:
+        calls.append(args)
+        return types.SimpleNamespace(
+            returncode=0, stdout="sha256:resolved\n", stderr=""
+        )
+
+    monkeypatch.setattr("bale_harness.agent.sandbox.subprocess.run", fake_run)
+    sandbox = DockerSandbox(tmp_path, docker_bin="docker")
+    assert sandbox.image_digest == "sha256:resolved"
+    assert sandbox.image_digest == "sha256:resolved"
+    assert len(calls) == 1
+
+
+def test_docker_sandbox_image_digest_none_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_run(*args: object, **kwargs: object) -> object:
+        return types.SimpleNamespace(returncode=1, stdout="", stderr="missing")
+
+    monkeypatch.setattr("bale_harness.agent.sandbox.subprocess.run", fake_run)
+    assert DockerSandbox(tmp_path, docker_bin="docker").image_digest is None
+
+
+def test_local_sandbox_image_digest_is_none(tmp_path: Path) -> None:
+    assert LocalSandbox(tmp_path).image_digest is None
