@@ -181,3 +181,21 @@ def test_eval_tasks_v1_unchanged(tmp_path: Path, monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert "category check failed" not in result.output
     assert "preflight failed" not in result.output
+
+
+def test_eval_json_includes_manifest(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BALE_PROVIDER", "fake")
+    suite_path = _write_suite(tmp_path, _suite_tasks(VALID_COUNTS))
+    json_path = tmp_path / "report.json"
+
+    result = runner.invoke(
+        app, ["eval", "--suite", str(suite_path), "--json", str(json_path)]
+    )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    assert data["report_schema_version"] == 1
+    assert data["manifest"]["dataset"]["suite"] == "golden"
+    assert data["manifest"]["task_count"] == 20
+    assert len(data["manifest"]["dataset"]["content_sha256"]) == 64
+    assert data["manifest"]["model"]["provider"] == "fake"

@@ -32,6 +32,7 @@ from bale_harness.agent.tools.mcp import (
 )
 from bale_harness.agent.trace import JsonlTraceExporter, read_trace
 from bale_harness.contracts import ApprovalMode, Turn
+from bale_harness.eval.manifest import build_manifest
 from bale_harness.eval.report import render_markdown
 from bale_harness.eval.runner import EvalReport, preflight_task, run_tasks
 from bale_harness.eval.task import (
@@ -298,9 +299,13 @@ def eval_command(
     """Run fixed evaluation tasks on fixture copies and verify their checks."""
     if (tasks is None) == (suite is None):
         raise typer.BadParameter("specify exactly one of --tasks or --suite")
+    suite_name: str | None = None
+    suite_version: str | None = None
     try:
         if suite is not None:
-            _manifest, task_list = load_suite(suite)
+            suite_manifest, task_list = load_suite(suite)
+            suite_name = suite_manifest.suite
+            suite_version = suite_manifest.suite_version
             task_file = resolve_task_file(suite)
             if not no_category_check:
                 ok_counts, actual = validate_suite_categories(task_list)
@@ -372,6 +377,15 @@ def eval_command(
             lambda _task: create_provider(settings),
             sandbox_factory,
         )
+    )
+    report.manifest = build_manifest(
+        task_list,
+        task_file.parent,
+        settings,
+        sandbox_backend=backend,
+        sandbox_image=image,
+        suite=suite_name,
+        suite_version=suite_version,
     )
     markdown = render_markdown(report)
     if output is None:

@@ -30,6 +30,7 @@ from bale_harness.agent.sandbox import Sandbox
 from bale_harness.agent.security import WorkspaceError, WorkspaceGuard
 from bale_harness.contracts import Turn
 from bale_harness.eval.integrity import IntegrityResult, check_integrity
+from bale_harness.eval.manifest import EvalManifest
 from bale_harness.eval.oracle import OracleEvaluation, build_eval_env, evaluate_oracle
 from bale_harness.eval.scenarios import run_scenario
 from bale_harness.eval.task import Check, EvalTask, EvalTaskV2, fixture_directory
@@ -127,6 +128,7 @@ class EvalReport(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    report_schema_version: int = 1
     started_at: str
     duration_ms: int = Field(ge=0)
     total: int = Field(ge=0)
@@ -134,6 +136,7 @@ class EvalReport(BaseModel):
     failed: int = Field(ge=0)
     errors: int = Field(ge=0)
     outcomes: list[TaskOutcome] = Field(default_factory=list)
+    manifest: EvalManifest | None = None
 
     @property
     def ok(self) -> bool:
