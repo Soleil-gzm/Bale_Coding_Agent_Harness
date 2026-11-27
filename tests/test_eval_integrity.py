@@ -121,3 +121,31 @@ def test_commented_assert_is_flagged_as_cheating(tmp_path: Path) -> None:
         v.code == "cheating" and "commented-out assert" in v.detail
         for v in result.violations
     )
+
+
+def test_read_only_flags_any_change(tmp_path: Path) -> None:
+    pristine = tmp_path / "pristine"
+    candidate = tmp_path / "candidate"
+    pristine.mkdir()
+    candidate.mkdir()
+    _write(pristine, "app.py", "x=1\n")
+    _write(candidate, "app.py", "x=1\n")
+    _write(candidate, "extra.py", "y=2\n")
+
+    result = check_integrity(pristine, candidate, IntegritySpec(read_only=True))
+
+    assert not result.ok
+    assert any(v.code == "read_only" for v in result.violations)
+
+
+def test_read_only_passes_when_unchanged(tmp_path: Path) -> None:
+    pristine = tmp_path / "pristine"
+    candidate = tmp_path / "candidate"
+    pristine.mkdir()
+    candidate.mkdir()
+    _write(pristine, "app.py", "x=1\n")
+    _write(candidate, "app.py", "x=1\n")
+
+    result = check_integrity(pristine, candidate, IntegritySpec(read_only=True))
+
+    assert result.ok

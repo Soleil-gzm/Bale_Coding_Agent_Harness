@@ -261,3 +261,49 @@ def test_preflight_fails_when_f2p_already_passes(tmp_path: Path) -> None:
     assert result.ok is False
     assert result.pristine_f2p_failed is False
     assert "f2p does not fail on pristine" in (result.error or "")
+
+
+HIDDEN_TESTS = (
+    "import pricing\n\n"
+    "def test_hidden_discount_large():\n"
+    "    assert pricing.total(200, 3, discount=50) == 550\n"
+)
+
+
+def _make_fixture_with_hidden(base: Path) -> Path:
+    base = _make_fixture(base)
+    _write(base / "verifier" / "discount" / "hidden" / "test_hidden.py", HIDDEN_TESTS)
+    return base
+
+
+def _v2_task_with_hidden() -> EvalTaskV2:
+    return _v2_task(
+        oracle={
+            "f2p": [PY + [F2P_NODE]],
+            "p2p": [PY + [P2P_NODE]],
+            "hidden": [PY + ["hidden/test_hidden.py"]],
+            "file_checks": [],
+        }
+    )
+
+
+def test_v2_hidden_tests_are_injected_and_pass(tmp_path: Path) -> None:
+    base = _make_fixture_with_hidden(tmp_path)
+    task = _v2_task_with_hidden()
+
+    report = asyncio.run(run_tasks([task], base, provider_factory=_fix_provider))
+
+    assert report.passed == 1
+    outcome = report.outcomes[0]
+    assert outcome.oracle is not None
+    assert outcome.oracle.hidden.status == "passed"
+    assert outcome.oracle.all_passed
+
+
+def test_preflight_passes_when_hidden_tests_present(tmp_path: Path) -> None:
+    base = _make_fixture_with_hidden(tmp_path)
+
+    result = preflight_task(_v2_task_with_hidden(), base)
+
+    assert result.ok is True
+    assert result.gold_all_passed is True

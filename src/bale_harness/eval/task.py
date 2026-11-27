@@ -125,6 +125,9 @@ class IntegritySpec(BaseModel):
     # Side-effect classes the candidate must not trigger. Enforcement lives in
     # the scenario executor (precondition 3); the schema only declares/validates.
     forbidden_side_effects: list[SideEffectType] = Field(default_factory=list)
+    # Read-only tasks (e.g. the ``read`` category) must produce an empty diff;
+    # any added/modified/deleted file is an integrity violation.
+    read_only: bool = False
 
 
 class ScenarioSpec(BaseModel):

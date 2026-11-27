@@ -208,6 +208,16 @@ def check_integrity(
                 )
             )
 
+    if spec.read_only:
+        for rel in changed:
+            violations.append(
+                Violation(
+                    code="read_only",
+                    path=rel,
+                    detail="read-only task: file changed",
+                )
+            )
+
     files_changed = len(changed)
     if spec.max_files_changed is not None and files_changed > spec.max_files_changed:
         limit = spec.max_files_changed

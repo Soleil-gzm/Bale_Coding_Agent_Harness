@@ -275,15 +275,35 @@ def _restore_forbidden(pristine: Path, verification: Path, patterns: list[str]) 
             shutil.copy2(src, dst)
 
 
+def _inject_verifier(base_dir: Path, task_id: str, target: Path) -> None:
+    """Copy task-private verifier files (e.g. hidden tests) into a run copy.
+
+    Verifier files live outside the fixture so the agent never sees them; they
+    are copied into the verification/pristine/gold copy right before the oracle
+    runs. A missing verifier directory is a no-op (not every task has one).
+    """
+    verifier_dir = Path(base_dir) / "verifier" / task_id
+    if not verifier_dir.is_dir():
+        return
+    for src in sorted(verifier_dir.rglob("*")):
+        if not src.is_file():
+            continue
+        rel = src.relative_to(verifier_dir)
+        dst = Path(target) / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+
+
 async def run_task(
     task: EvalTask | EvalTaskV2,
     fixture: Path,
     provider: ModelProvider,
     sandbox_factory: SandboxFactory | None = None,
+    base_dir: Path | None = None,
 ) -> TaskOutcome:
     """Run one task; v2 tasks use the three-workspace integrity/oracle flow."""
     if isinstance(task, EvalTaskV2):
-        return await _run_v2_task(task, fixture, provider, sandbox_factory)
+        return await _run_v2_task(task, fixture, provider, sandbox_factory, base_dir)
     return await _run_v1_task(task, fixture, provider, sandbox_factory)
 
 
@@ -354,6 +374,7 @@ async def _run_v2_task(
     fixture: Path,
     provider: ModelProvider,
     sandbox_factory: SandboxFactory | None,
+    base_dir: Path | None = None,
 ) -> TaskOutcome:
     """Three-workspace execution: pristine diff, integrity gate, oracle verify."""
     started = time.perf_counter()
@@ -374,6 +395,8 @@ async def _run_v2_task(
 
         _copy_tree(workspace, verification)
         _restore_forbidden(pristine, verification, task.integrity.forbidden_changes)
+        if base_dir is not None:
+            _inject_verifier(base_dir, task.id, verification)
         check_results = evaluate_checks(verification, task.oracle.file_checks)
 
         oracle_eval = evaluate_oracle(task.oracle, verification, evidence, env=env)
@@ -493,6 +516,8 @@ def preflight_task(
                 error=f"cannot apply gold_patch: {error}",
             )
 
+        _inject_verifier(base_dir, task.id, pristine)
+        _inject_verifier(base_dir, task.id, gold)
         pristine_eval = evaluate_oracle(
             task.oracle, pristine, evidence / "pristine", run_env, timeout_s
         )
@@ -551,7 +576,9 @@ async def run_tasks(
                 )
             )
             continue
-        outcomes.append(await run_task(task, fixture, factory(task), sandbox_factory))
+        outcomes.append(
+            await run_task(task, fixture, factory(task), sandbox_factory, base_dir)
+        )
 
     passed = sum(1 for outcome in outcomes if outcome.status == "passed")
     failed = sum(1 for outcome in outcomes if outcome.status == "failed")
