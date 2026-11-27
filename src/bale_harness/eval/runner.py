@@ -31,6 +31,7 @@ from bale_harness.agent.sandbox import Sandbox
 from bale_harness.agent.security import WorkspaceError, WorkspaceGuard
 from bale_harness.agent.trace import (
     JsonlTraceExporter,
+    new_span_id,
     read_trace,
     repeated_tool_calls,
 )
@@ -202,6 +203,37 @@ def _to_integrity_outcome(result: IntegrityResult) -> IntegrityOutcome:
             for v in result.violations
         ],
     )
+
+
+async def _emit_verifier_span(
+    tracer: JsonlTraceExporter,
+    task_id: str,
+    evaluation: OracleEvaluation,
+    duration_ms: int,
+) -> None:
+    """Record how long the oracle verified one task and why it failed."""
+    if evaluation.all_passed:
+        status = "success"
+    elif evaluation.has_error:
+        status = "error"
+    else:
+        status = "failed"
+    try:
+        await tracer.emit(
+            "verifier",
+            status=status,
+            duration_ms=duration_ms,
+            span_type="verifier",
+            span_id=new_span_id(),
+            data={
+                "task_id": task_id,
+                "f2p": evaluation.f2p.status,
+                "p2p": evaluation.p2p.status,
+                "hidden": evaluation.hidden.status,
+            },
+        )
+    except Exception:  # tracing is best-effort
+        return
 
 
 def _to_oracle_outcome(evaluation: OracleEvaluation) -> OracleOutcome:
@@ -484,7 +516,11 @@ async def _run_v2_task(
             _inject_verifier(base_dir, task.id, verification)
         check_results = evaluate_checks(verification, task.oracle.file_checks)
 
+        oracle_started = time.perf_counter()
         oracle_eval = evaluate_oracle(task.oracle, verification, evidence, env=env)
+        await _emit_verifier_span(
+            tracer, task.id, oracle_eval, _elapsed_ms(oracle_started)
+        )
         oracle_outcome = _to_oracle_outcome(oracle_eval)
 
         failed_checks = [item for item in check_results if not item.passed]

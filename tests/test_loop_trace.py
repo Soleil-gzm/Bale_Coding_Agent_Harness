@@ -1,10 +1,12 @@
 import asyncio
 import json
+import sys
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
+from bale_harness.agent.approval import auto_approve
 from bale_harness.agent.cost import CostRates
 from bale_harness.agent.loop import build_default_loop
 from bale_harness.agent.messages import (
@@ -87,14 +89,31 @@ def test_completed_run_emits_ordered_trace_and_cost(tmp_path: Path) -> None:
     events = _events(trace)
     assert [event["event"] for event in events] == [
         "turn_started",
+        "context",
         "model_call",
         "turn_finished",
     ]
     assert events[0]["data"] == {"resumed": False}
-    assert events[1]["data"]["usage"]["total_tokens"] == 15
-    assert events[1]["data"]["has_tool_calls"] is False
-    assert events[2]["status"] == "completed"
-    assert events[2]["data"]["estimated_cost"] == pytest.approx(20 / 1000)
+    assert events[2]["data"]["usage"]["total_tokens"] == 15
+    assert events[2]["data"]["has_tool_calls"] is False
+    assert events[3]["status"] == "completed"
+    assert events[3]["data"]["estimated_cost"] == pytest.approx(20 / 1000)
+
+    # Spans form a tree below one turn span inside a single trace.
+    trace_ids = {event["trace_id"] for event in events}
+    assert len(trace_ids) == 1 and None not in trace_ids
+    assert [event["span_type"] for event in events] == [
+        "turn",
+        "context",
+        "model",
+        "turn",
+    ]
+    turn_span = events[0]["span_id"]
+    assert events[3]["span_id"] == turn_span
+    assert events[0]["parent_id"] is None
+    assert events[1]["parent_id"] == turn_span
+    assert events[2]["parent_id"] == turn_span
+    assert all(event["span_id"] for event in events)
 
 
 def test_tool_calls_are_traced(tmp_path: Path) -> None:
@@ -116,14 +135,18 @@ def test_tool_calls_are_traced(tmp_path: Path) -> None:
     events = _events(trace)
     assert [event["event"] for event in events] == [
         "turn_started",
+        "context",
         "model_call",
         "tool_call",
+        "context",
         "model_call",
         "turn_finished",
     ]
-    tool_event = events[2]
+    tool_event = events[3]
     assert tool_event["name"] == "list_files"
     assert tool_event["status"] == "success"
+    assert tool_event["span_type"] == "tool"
+    assert tool_event["parent_id"] == events[0]["span_id"]
     assert tool_event["data"]["call_id"] == "c1"
     assert result.estimated_cost is None
 
@@ -166,3 +189,65 @@ def test_broken_tracer_does_not_change_the_result(tmp_path: Path) -> None:
     result = asyncio.run(loop.run(_turn(tmp_path)))
 
     assert result.status == "completed"
+
+
+def test_approval_and_sandbox_spans_are_traced(tmp_path: Path) -> None:
+    trace = tmp_path / "trace.jsonl"
+    provider = FakeProvider(
+        [
+            ModelResponse(
+                tool_calls=[
+                    ToolCall(
+                        call_id="c1",
+                        name="shell",
+                        arguments={"command": [sys.executable, "-c", "print('ok')"]},
+                    )
+                ]
+            ),
+            ModelResponse(content="done"),
+        ]
+    )
+    loop = build_default_loop(
+        provider,
+        tmp_path,
+        approver=auto_approve,
+        tracer=JsonlTraceExporter(trace),
+    )
+
+    result = asyncio.run(loop.run(_turn(tmp_path)))
+
+    assert result.status == "completed"
+    events = _events(trace)
+    turn_span = events[0]["span_id"]
+    spans = {event["span_type"]: event for event in events if event["span_type"]}
+    assert spans["approval"]["status"] == "approved"
+    assert spans["approval"]["name"] == "shell"
+    assert spans["approval"]["parent_id"] == turn_span
+    assert spans["sandbox"]["status"] == "success"
+    assert spans["sandbox"]["name"] == "shell"
+    assert spans["sandbox"]["parent_id"] == turn_span
+    assert spans["sandbox"]["data"]["backend"] == "LocalSandbox"
+
+
+def test_retrieval_span_records_excerpt_count(tmp_path: Path) -> None:
+    trace = tmp_path / "trace.jsonl"
+
+    class FakeRetriever:
+        def retrieve(self, query: str) -> list[str]:
+            return ["excerpt one", "excerpt two"]
+
+    loop = build_default_loop(
+        FakeProvider([ModelResponse(content="done")]),
+        tmp_path,
+        retriever=FakeRetriever(),
+        tracer=JsonlTraceExporter(trace),
+    )
+
+    result = asyncio.run(loop.run(_turn(tmp_path)))
+
+    assert result.status == "completed"
+    events = _events(trace)
+    retrieval = next(e for e in events if e["span_type"] == "retrieval")
+    assert retrieval["status"] == "success"
+    assert retrieval["data"]["excerpts"] == 2
+    assert retrieval["parent_id"] == events[0]["span_id"]

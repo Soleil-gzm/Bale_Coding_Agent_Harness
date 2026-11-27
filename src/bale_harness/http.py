@@ -86,6 +86,7 @@ class RunRequest(BaseModel):
     workspace: Path
     token_budget: int = Field(default=128_000, gt=0)
     max_iterations: int = Field(default=20, ge=1, le=500)
+    cost_budget: float | None = Field(default=None, ge=0)
     time_budget: float | None = Field(default=None, gt=0)
     approval_mode: ApprovalMode = "approve_write"
     approve_writes: bool = False
@@ -362,6 +363,7 @@ async def _execute(
         workspace=request.workspace,
         session_id=context.session_id,
         token_budget=request.token_budget,
+        cost_budget=request.cost_budget,
         max_iterations=request.max_iterations,
         time_budget=request.time_budget,
         approval_mode=request.approval_mode,

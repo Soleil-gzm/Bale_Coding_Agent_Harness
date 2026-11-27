@@ -14,20 +14,43 @@ import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
-from uuid import UUID
+from typing import Any, Literal, Protocol
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from bale_harness.contracts import Turn
+
+SpanType = Literal[
+    "turn",
+    "model",
+    "context",
+    "tool",
+    "approval",
+    "sandbox",
+    "checkpoint",
+    "retrieval",
+    "verifier",
+]
 
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def new_span_id() -> str:
+    """Return a fresh span identifier."""
+    return uuid4().hex
+
+
 class TraceEvent(BaseModel):
-    """One immutable record in a trace file."""
+    """One immutable record in a trace file.
+
+    ``span_type``/``span_id``/``parent_id`` turn the flat event list into a
+    span tree: every event belongs to at most one span, and child spans point
+    at the span that triggered them. Older trace files without these fields
+    still validate because every span field is optional.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -40,6 +63,10 @@ class TraceEvent(BaseModel):
     name: str | None = None
     status: str | None = None
     duration_ms: int | None = None
+    span_type: SpanType | None = None
+    trace_id: str | None = None
+    span_id: str | None = None
+    parent_id: str | None = None
     data: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -57,9 +84,84 @@ class TraceExporter(Protocol):
         name: str | None = None,
         status: str | None = None,
         duration_ms: int | None = None,
+        span_type: SpanType | None = None,
+        span_id: str | None = None,
+        parent_id: str | None = None,
         data: dict[str, Any] | None = None,
     ) -> None:
         """Append one event."""
+
+
+class SpanSink(Protocol):
+    """Minimal span emitter passed to tools and the tool registry."""
+
+    async def emit_span(
+        self,
+        span_type: SpanType,
+        event: str,
+        *,
+        iteration: int | None = None,
+        name: str | None = None,
+        status: str | None = None,
+        duration_ms: int | None = None,
+        span_id: str | None = None,
+        parent_id: str | None = None,
+        root: bool = False,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        """Emit one event that belongs to ``span_type``."""
+
+
+class TraceSpanSink:
+    """Stamp spans with a fresh id and a shared parent, then delegate.
+
+    The agent loop binds the turn span as the default parent so approval and
+    sandbox spans emitted from deep inside tool execution still point back to
+    the turn. Every failure is swallowed: tracing is best-effort.
+    """
+
+    def __init__(self, exporter: TraceExporter | None) -> None:
+        self._exporter = exporter
+        self._default_parent: str | None = None
+        self._disabled = False
+
+    def bind_parent(self, span_id: str | None) -> None:
+        self._default_parent = span_id
+
+    def disable(self) -> None:
+        self._disabled = True
+
+    async def emit_span(
+        self,
+        span_type: SpanType,
+        event: str,
+        *,
+        iteration: int | None = None,
+        name: str | None = None,
+        status: str | None = None,
+        duration_ms: int | None = None,
+        span_id: str | None = None,
+        parent_id: str | None = None,
+        root: bool = False,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        if self._exporter is None or self._disabled:
+            return
+        parent = None if root else (parent_id or self._default_parent)
+        try:
+            await self._exporter.emit(
+                event,
+                iteration=iteration,
+                name=name,
+                status=status,
+                duration_ms=duration_ms,
+                span_type=span_type,
+                span_id=span_id or new_span_id(),
+                parent_id=parent,
+                data=data,
+            )
+        except Exception:  # trace failures never change the run outcome
+            return
 
 
 class NullTraceExporter:
@@ -76,6 +178,9 @@ class NullTraceExporter:
         name: str | None = None,
         status: str | None = None,
         duration_ms: int | None = None,
+        span_type: SpanType | None = None,
+        span_id: str | None = None,
+        parent_id: str | None = None,
         data: dict[str, Any] | None = None,
     ) -> None:
         return None
@@ -104,10 +209,12 @@ class JsonlTraceExporter:
         self._lock = asyncio.Lock()
         self._turn_id: UUID | None = None
         self._session_id: UUID | None = None
+        self._trace_id: str | None = None
 
     async def bind(self, turn: Turn) -> None:
         self._turn_id = turn.turn_id
         self._session_id = turn.session_id
+        self._trace_id = new_span_id()
 
     async def emit(
         self,
@@ -117,6 +224,9 @@ class JsonlTraceExporter:
         name: str | None = None,
         status: str | None = None,
         duration_ms: int | None = None,
+        span_type: SpanType | None = None,
+        span_id: str | None = None,
+        parent_id: str | None = None,
         data: dict[str, Any] | None = None,
     ) -> None:
         if self._turn_id is None:
@@ -134,6 +244,10 @@ class JsonlTraceExporter:
                     name=name,
                     status=status,
                     duration_ms=duration_ms,
+                    span_type=span_type,
+                    trace_id=self._trace_id,
+                    span_id=span_id,
+                    parent_id=parent_id,
                     data=dict(data or {}),
                 )
                 line = record.model_dump_json() + "\n"
@@ -183,10 +297,12 @@ class QueueTraceExporter:
         self._seq = 0
         self._turn_id: UUID | None = None
         self._session_id: UUID | None = None
+        self._trace_id: str | None = None
 
     async def bind(self, turn: Turn) -> None:
         self._turn_id = turn.turn_id
         self._session_id = turn.session_id
+        self._trace_id = new_span_id()
 
     async def emit(
         self,
@@ -196,6 +312,9 @@ class QueueTraceExporter:
         name: str | None = None,
         status: str | None = None,
         duration_ms: int | None = None,
+        span_type: SpanType | None = None,
+        span_id: str | None = None,
+        parent_id: str | None = None,
         data: dict[str, Any] | None = None,
     ) -> None:
         if self._turn_id is None:
@@ -212,6 +331,10 @@ class QueueTraceExporter:
                 name=name,
                 status=status,
                 duration_ms=duration_ms,
+                span_type=span_type,
+                trace_id=self._trace_id,
+                span_id=span_id,
+                parent_id=parent_id,
                 data=dict(data or {}),
             )
         )

@@ -19,9 +19,63 @@ from bale_harness.agent.sandbox import (
 )
 from bale_harness.agent.tools.common import error, success, truncate
 from bale_harness.agent.tools.registry import BaseTool
+from bale_harness.agent.trace import SpanSink
 from bale_harness.contracts import ToolResult
 
 SHELL_METACHARACTERS = ("|", "&", ";", ">", "<", "`", "$(")
+
+
+async def _sandbox_run(
+    sandbox: Sandbox,
+    name: str,
+    argv: list[str],
+    *,
+    span_sink: SpanSink | None,
+    cwd: str = ".",
+    timeout_s: float,
+    extra_env: dict[str, str] | None = None,
+) -> ExecResult:
+    """Run one command and record a ``sandbox`` span around it."""
+    started = time.perf_counter()
+    try:
+        result = await sandbox.run(
+            argv, cwd=cwd, timeout_s=timeout_s, extra_env=extra_env
+        )
+    except SandboxViolation:
+        await _emit_sandbox(span_sink, sandbox, name, "error", started, None)
+        raise
+    if result.timed_out:
+        status = "timeout"
+    elif result.exit_code == 0:
+        status = "success"
+    else:
+        status = "failed"
+    await _emit_sandbox(span_sink, sandbox, name, status, started, result)
+    return result
+
+
+async def _emit_sandbox(
+    span_sink: SpanSink | None,
+    sandbox: Sandbox,
+    name: str,
+    status: str,
+    started: float,
+    result: ExecResult | None,
+) -> None:
+    if span_sink is None:
+        return
+    data: dict[str, object] = {"backend": type(sandbox).__name__}
+    if result is not None:
+        data["exit_code"] = result.exit_code
+        data["timed_out"] = result.timed_out
+    await span_sink.emit_span(
+        "sandbox",
+        "sandbox",
+        name=name,
+        status=status,
+        duration_ms=max(0, int((time.perf_counter() - started) * 1000)),
+        data=data,
+    )
 
 
 def split_command(command: Any) -> list[str]:
@@ -94,8 +148,9 @@ class ShellTool(BaseTool):
         timeout_ms=120_000,
     )
 
-    def __init__(self, sandbox: Sandbox) -> None:
+    def __init__(self, sandbox: Sandbox, span_sink: SpanSink | None = None) -> None:
         self._sandbox = sandbox
+        self._span_sink = span_sink
 
     def validate_arguments(self, arguments: dict[str, Any]) -> None:
         split_command(arguments.get("command"))
@@ -118,7 +173,14 @@ class ShellTool(BaseTool):
         timeout_s = float(arguments.get("timeout_s", 60))
 
         try:
-            result = await self._sandbox.run(argv, cwd=cwd, timeout_s=timeout_s)
+            result = await _sandbox_run(
+                self._sandbox,
+                "shell",
+                argv,
+                span_sink=self._span_sink,
+                cwd=cwd,
+                timeout_s=timeout_s,
+            )
         except SandboxViolation as exc:
             return error("shell", str(exc), "sandbox_violation", start)
 
@@ -164,8 +226,9 @@ class RunTestsTool(BaseTool):
         timeout_ms=300_000,
     )
 
-    def __init__(self, sandbox: Sandbox) -> None:
+    def __init__(self, sandbox: Sandbox, span_sink: SpanSink | None = None) -> None:
         self._sandbox = sandbox
+        self._span_sink = span_sink
 
     def validate_arguments(self, arguments: dict[str, Any]) -> None:
         path = arguments.get("path", ".")
@@ -200,8 +263,11 @@ class RunTestsTool(BaseTool):
         ]
 
         try:
-            result = await self._sandbox.run(
+            result = await _sandbox_run(
+                self._sandbox,
+                "run_tests",
                 argv,
+                span_sink=self._span_sink,
                 timeout_s=timeout_s,
                 # Keep the workspace clean: no __pycache__ from test imports.
                 extra_env={"PYTHONDONTWRITEBYTECODE": "1"},
@@ -236,6 +302,8 @@ class RunTestsTool(BaseTool):
         )
 
 
-def build_exec_tools(sandbox: Sandbox) -> list[BaseTool]:
+def build_exec_tools(
+    sandbox: Sandbox, span_sink: SpanSink | None = None
+) -> list[BaseTool]:
     """Return the command-executing tools wired to ``sandbox``."""
-    return [ShellTool(sandbox), RunTestsTool(sandbox)]
+    return [ShellTool(sandbox, span_sink), RunTestsTool(sandbox, span_sink)]

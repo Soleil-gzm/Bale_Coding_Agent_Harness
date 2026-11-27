@@ -10,10 +10,10 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from bale_harness.agent.loop import build_default_loop
-from bale_harness.agent.messages import ModelResponse
+from bale_harness.agent.messages import ModelResponse, ToolCall, ToolSpec
 from bale_harness.agent.session import SCHEMA, SessionStore
 from bale_harness.cli import app
-from bale_harness.contracts import Turn
+from bale_harness.contracts import ToolResult, Turn
 from bale_harness.eval.task import EvalTask
 from bale_harness.http import create_app
 from bale_harness.providers import FakeProvider
@@ -34,6 +34,33 @@ class SlowProvider:
         self.calls += 1
         await asyncio.sleep(self.delay)
         return ModelResponse(content="too late")
+
+
+class SlowTool:
+    """Read-only tool that outlives the turn budget while running."""
+
+    spec = ToolSpec(
+        name="slow",
+        description="Sleep for several seconds",
+        parameters={"type": "object", "properties": {}},
+        side_effect="read",
+    )
+
+    def __init__(self, delay: float = 5.0) -> None:
+        self.delay = delay
+
+    def validate_arguments(self, arguments: dict) -> None:
+        return None
+
+    async def execute(self, arguments: dict) -> ToolResult:
+        await asyncio.sleep(self.delay)
+        return ToolResult(
+            call_id="",
+            name="slow",
+            status="success",
+            content="finished",
+            latency_ms=int(self.delay * 1000),
+        )
 
 
 def _turn(tmp_path: Path, **overrides: object) -> Turn:
@@ -69,6 +96,50 @@ def test_time_budget_stops_slow_model_call(tmp_path: Path) -> None:
     assert result.error == "time budget exceeded"
     assert elapsed < 1.0
     assert result.duration_ms is not None
+
+
+def test_time_budget_bounds_the_tool_batch(tmp_path: Path) -> None:
+    provider = FakeProvider(
+        [
+            ModelResponse(
+                tool_calls=[ToolCall(call_id="c1", name="slow", arguments={})]
+            ),
+            ModelResponse(content="done"),
+        ]
+    )
+    loop = build_default_loop(provider, tmp_path, extra_tools=[SlowTool()])
+
+    started = time.perf_counter()
+    result = asyncio.run(loop.run(_turn(tmp_path, time_budget=0.05)))
+    elapsed = time.perf_counter() - started
+
+    assert result.status == "failed"
+    assert result.error == "time budget exceeded"
+    assert elapsed < 2.0
+
+
+def test_finish_in_a_slow_batch_cannot_beat_the_budget(tmp_path: Path) -> None:
+    provider = FakeProvider(
+        [
+            ModelResponse(
+                tool_calls=[
+                    ToolCall(call_id="c1", name="slow", arguments={}),
+                    ToolCall(
+                        call_id="c2",
+                        name="finish",
+                        arguments={"message": "done"},
+                    ),
+                ]
+            ),
+            ModelResponse(content="done"),
+        ]
+    )
+    loop = build_default_loop(provider, tmp_path, extra_tools=[SlowTool()])
+
+    result = asyncio.run(loop.run(_turn(tmp_path, time_budget=0.05)))
+
+    assert result.status == "failed"
+    assert result.error == "time budget exceeded"
 
 
 def test_time_budget_checked_between_iterations(tmp_path: Path) -> None:

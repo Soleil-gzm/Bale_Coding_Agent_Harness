@@ -224,6 +224,15 @@ class LocalSandbox:
             raw_out, raw_err = await asyncio.wait_for(
                 process.communicate(), timeout=timeout_s
             )
+        except asyncio.CancelledError:
+            # Cancelled runs (time budget, HTTP disconnect) must not leave
+            # build/test subprocesses mutating the workspace after the turn.
+            _kill_process_tree(process)
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except TimeoutError:
+                pass
+            raise
         except TimeoutError:
             timed_out = True
             _kill_process_tree(process)

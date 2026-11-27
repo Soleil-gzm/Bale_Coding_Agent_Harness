@@ -21,6 +21,7 @@ from bale_harness.agent.messages import (
     ToolSpec,
     argument_fingerprint,
 )
+from bale_harness.agent.trace import SpanSink
 from bale_harness.contracts import ToolResult
 
 
@@ -78,10 +79,12 @@ class ToolRegistry:
         self,
         approver: Approver | None = None,
         interrupt_hook: InterruptHook | None = None,
+        span_sink: SpanSink | None = None,
     ) -> None:
         self._tools: dict[str, Tool] = {}
         self._approver = approver
         self._interrupt_hook = interrupt_hook
+        self._span_sink = span_sink
         self._executed: dict[tuple[str, str, str], ToolResult] = {}
 
     def register(self, tool: Tool) -> None:
@@ -134,7 +137,7 @@ class ToolRegistry:
             if cached is not None:
                 return cached
 
-            if not await self._is_approved(call, tool.spec):
+            if not await self._approved_with_span(call, tool.spec):
                 return ToolResult(
                     call_id=call.call_id,
                     name=call.name,
@@ -198,6 +201,21 @@ class ToolRegistry:
             return bool(await self._approver.approve(call, spec))
         except Exception:  # fail safe: an approval error means "deny"
             return False
+
+    async def _approved_with_span(self, call: ToolCall, spec: ToolSpec) -> bool:
+        """Decide one call and record how long the approval gate took."""
+        started = time.perf_counter()
+        approved = await self._is_approved(call, spec)
+        if self._span_sink is not None:
+            await self._span_sink.emit_span(
+                "approval",
+                "approval",
+                name=call.name,
+                status="approved" if approved else "denied",
+                duration_ms=_elapsed_ms(started),
+                data={"call_id": call.call_id, "side_effect": spec.side_effect},
+            )
+        return approved
 
     def _all_safe_for_parallel(self, calls: list[ToolCall]) -> bool:
         for call in calls:

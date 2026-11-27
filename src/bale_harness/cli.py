@@ -593,6 +593,17 @@ def run_command(
     message: Annotated[str | None, typer.Option(help="Current user message")] = None,
     token_budget: Annotated[int, typer.Option(min=1)] = 128000,
     max_iterations: Annotated[int, typer.Option(min=1, max=500)] = 20,
+    cost_budget: Annotated[
+        float | None,
+        typer.Option(
+            "--cost-budget",
+            min=0,
+            help=(
+                "Maximum estimated cost for the run; requires configured "
+                "input/output cost rates"
+            ),
+        ),
+    ] = None,
     time_budget: Annotated[
         float | None,
         typer.Option(
@@ -736,6 +747,7 @@ def run_command(
             workspace=workspace,
             session_id=parsed_session_id,
             token_budget=token_budget,
+            cost_budget=cost_budget,
             max_iterations=max_iterations,
             time_budget=time_budget,
             repo_revision=repo_revision,

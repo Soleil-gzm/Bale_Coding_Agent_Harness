@@ -49,8 +49,13 @@ from bale_harness.agent.tools.exec import build_exec_tools
 from bale_harness.agent.tools.git import build_git_tools
 from bale_harness.agent.tools.registry import InterruptHook, Tool, ToolRegistry
 from bale_harness.agent.tools.write import build_write_tools
-from bale_harness.agent.trace import TraceExporter
-from bale_harness.contracts import ApprovalMode, Turn
+from bale_harness.agent.trace import (
+    SpanType,
+    TraceExporter,
+    TraceSpanSink,
+    new_span_id,
+)
+from bale_harness.contracts import ApprovalMode, ToolResult, Turn
 from bale_harness.providers import ModelProvider
 from bale_harness.repo_index import Embedder
 
@@ -118,6 +123,7 @@ class AgentLoop:
         cost_rates: CostRates | None = None,
         retriever: Retriever | None = None,
         interrupt_hook: InterruptHook | None = None,
+        span_sink: TraceSpanSink | None = None,
     ) -> None:
         self._provider = provider
         self._registry = registry
@@ -128,6 +134,12 @@ class AgentLoop:
         self._cost_rates = cost_rates
         self._retriever = retriever
         self._interrupt_hook = interrupt_hook
+        self._span_sink = (
+            span_sink
+            if span_sink is not None
+            else (TraceSpanSink(tracer) if tracer is not None else None)
+        )
+        self._turn_span_id: str | None = None
         self._run_started: float | None = None
 
     async def run(
@@ -147,6 +159,18 @@ class AgentLoop:
 
         try:
             await self._start_trace(turn, resumed=resume)
+            if turn.cost_budget is not None and self._cost_rates is None:
+                # Fail closed: a budget that cannot be measured must not be
+                # silently ignored, otherwise spend is unbounded.
+                return await self._failed(
+                    turn,
+                    "cost budget requires cost rates",
+                    iterations,
+                    tool_calls,
+                    total_usage,
+                    checkpoints,
+                    resumed,
+                )
             if self._checkpoint is not None:
                 await self._checkpoint.init()
             if self._session is not None:
@@ -159,6 +183,16 @@ class AgentLoop:
                 iterations = record.iteration
                 tool_calls = record.tool_calls
                 resumed = True
+                if self._cost_budget_exceeded(turn, total_usage):
+                    return await self._failed(
+                        turn,
+                        "cost budget exceeded",
+                        iterations,
+                        tool_calls,
+                        total_usage,
+                        checkpoints,
+                        resumed,
+                    )
                 if (
                     history
                     and history[-1].role == "assistant"
@@ -232,8 +266,20 @@ class AgentLoop:
 
                 iterations += 1
                 specs: list[ToolSpec] = self._registry.list_specs()
+                context_started = time.perf_counter()
                 prompt = builder.build(history)
                 prompt_tokens = _prompt_tokens(prompt)
+                await self._emit_span(
+                    "context",
+                    "context",
+                    iteration=iterations,
+                    duration_ms=_duration_ms(context_started),
+                    data={
+                        "prompt_tokens": prompt_tokens,
+                        "prompt_messages": len(prompt),
+                        "history_messages": len(history),
+                    },
+                )
                 if total_usage.total_tokens + prompt_tokens > turn.token_budget:
                     return await self._failed(
                         turn,
@@ -271,7 +317,8 @@ class AgentLoop:
                         resumed,
                     )
                 model_duration = _duration_ms(model_started)
-                await self._emit(
+                await self._emit_span(
+                    "model",
                     "model_call",
                     iteration=iterations,
                     duration_ms=model_duration,
@@ -287,6 +334,16 @@ class AgentLoop:
                     return await self._failed(
                         turn,
                         "token budget exceeded",
+                        iterations,
+                        tool_calls,
+                        total_usage,
+                        checkpoints,
+                        resumed,
+                    )
+                if self._cost_budget_exceeded(turn, total_usage):
+                    return await self._failed(
+                        turn,
+                        "cost budget exceeded",
                         iterations,
                         tool_calls,
                         total_usage,
@@ -325,7 +382,18 @@ class AgentLoop:
                         turn.turn_id, assistant, calls
                     )
 
-                results = await self._registry.execute_batch(calls)
+                try:
+                    results = await self._execute_batch(turn, calls)
+                except TimeoutError:
+                    return await self._failed(
+                        turn,
+                        "time budget exceeded",
+                        iterations,
+                        tool_calls,
+                        total_usage,
+                        checkpoints,
+                        resumed,
+                    )
                 tool_calls += len(calls)
                 # When an interrupt hook is wired, a side-effect hook may have
                 # signalled cancellation mid-batch. Exit before persisting so the
@@ -366,7 +434,8 @@ class AgentLoop:
                         estimated_cost=self._cost(total_usage),
                     )
                 for call, result in zip(calls, results, strict=True):
-                    await self._emit(
+                    await self._emit_span(
+                        "tool",
                         "tool_call",
                         iteration=iterations,
                         name=call.name,
@@ -379,13 +448,28 @@ class AgentLoop:
                         },
                     )
 
+                if self._time_exhausted(turn):
+                    # Tools and approvals ran inside the budget window; a
+                    # successful ``finish`` must not turn an over-budget run
+                    # into a completed one.
+                    return await self._failed(
+                        turn,
+                        "time budget exceeded",
+                        iterations,
+                        tool_calls,
+                        total_usage,
+                        checkpoints,
+                        resumed,
+                    )
+
                 if self._checkpoint is not None:
                     snapshot = await self._checkpoint.snapshot(
                         f"bale: iteration {iterations}"
                     )
                     if snapshot is not None:
                         checkpoints.append(snapshot)
-                        await self._emit(
+                        await self._emit_span(
+                            "checkpoint",
                             "checkpoint",
                             iteration=iterations,
                             data={"snapshot": snapshot},
@@ -525,10 +609,26 @@ class AgentLoop:
         """Retrieve excerpts off the event loop; failures just skip context."""
         if self._retriever is None:
             return ()
+        started = time.perf_counter()
         try:
-            return await asyncio.to_thread(self._retriever.retrieve, turn.message)
+            excerpts = await asyncio.to_thread(self._retriever.retrieve, turn.message)
         except Exception:
+            await self._emit_span(
+                "retrieval",
+                "retrieval",
+                status="error",
+                duration_ms=_duration_ms(started),
+                data={"excerpts": 0},
+            )
             return ()
+        await self._emit_span(
+            "retrieval",
+            "retrieval",
+            status="success",
+            duration_ms=_duration_ms(started),
+            data={"excerpts": len(excerpts)},
+        )
+        return excerpts
 
     def _session_id(self, turn: Turn) -> UUID | None:
         return turn.session_id if self._session is not None else None
@@ -680,22 +780,54 @@ class AgentLoop:
             return
 
     async def _start_trace(self, turn: Turn, *, resumed: bool) -> None:
-        if self._tracer is None:
+        if self._tracer is None and self._span_sink is None:
             return
-        try:
-            await self._tracer.bind(turn)
-        except Exception:
-            self._tracer = None
-            return
-        await self._emit("turn_started", data={"resumed": resumed})
+        if self._tracer is not None:
+            try:
+                await self._tracer.bind(turn)
+            except Exception:
+                self._tracer = None
+                if self._span_sink is not None:
+                    self._span_sink.disable()
+                    self._span_sink = None
+                return
+        self._turn_span_id = new_span_id()
+        if self._span_sink is not None:
+            self._span_sink.bind_parent(self._turn_span_id)
+        await self._emit_span(
+            "turn",
+            "turn_started",
+            span_id=self._turn_span_id,
+            root=True,
+            data={"resumed": resumed},
+        )
 
-    async def _emit(self, event: str, **fields: object) -> None:
-        if self._tracer is None:
+    async def _emit_span(
+        self,
+        span_type: SpanType,
+        event: str,
+        *,
+        iteration: int | None = None,
+        name: str | None = None,
+        status: str | None = None,
+        duration_ms: int | None = None,
+        span_id: str | None = None,
+        root: bool = False,
+        data: dict[str, object] | None = None,
+    ) -> None:
+        if self._span_sink is None:
             return
-        try:
-            await self._tracer.emit(event, **fields)  # type: ignore[arg-type]
-        except Exception:
-            return
+        await self._span_sink.emit_span(
+            span_type,
+            event,
+            iteration=iteration,
+            name=name,
+            status=status,
+            duration_ms=duration_ms,
+            span_id=span_id,
+            root=root,
+            data=dict(data) if data is not None else None,
+        )
 
     async def _trace_finished(
         self,
@@ -707,8 +839,11 @@ class AgentLoop:
         tool_calls: int,
         usage: Usage,
     ) -> None:
-        await self._emit(
+        await self._emit_span(
+            "turn",
             "turn_finished",
+            span_id=self._turn_span_id,
+            root=True,
             status=status,
             iteration=iterations,
             duration_ms=self._elapsed_ms(),
@@ -719,6 +854,24 @@ class AgentLoop:
                 "usage": usage.model_dump(mode="json"),
                 "estimated_cost": self._cost(usage),
             },
+        )
+
+    async def _execute_batch(
+        self, turn: Turn, calls: list[ToolCall]
+    ) -> list[ToolResult]:
+        """Run a tool batch inside the remaining wall-clock budget.
+
+        Approvals happen inside the registry, so bounding the whole batch also
+        bounds approval waiting. Exceeding the budget is reported as
+        ``TimeoutError`` and mapped to ``time budget exceeded`` by the caller.
+        """
+        remaining = self._remaining_seconds(turn)
+        if remaining is None:
+            return await self._registry.execute_batch(calls)
+        if remaining <= 0:
+            raise TimeoutError
+        return await asyncio.wait_for(
+            self._registry.execute_batch(calls), timeout=remaining
         )
 
     async def _complete(
@@ -747,6 +900,12 @@ class AgentLoop:
         if self._run_started is None:
             return 0
         return _duration_ms(self._run_started)
+
+    def _cost_budget_exceeded(self, turn: Turn, usage: Usage) -> bool:
+        if turn.cost_budget is None:
+            return False
+        cost = self._cost(usage)
+        return cost is not None and cost > turn.cost_budget
 
     def _cost(self, usage: Usage) -> float | None:
         if self._cost_rates is None:
@@ -797,7 +956,8 @@ def build_default_loop(
         policy: Approver = approver  # type: ignore[assignment]
     else:
         policy = PolicyApprover(approval_mode, approver)  # type: ignore[arg-type]
-    registry = ToolRegistry(policy, interrupt_hook=interrupt_hook)
+    span_sink = TraceSpanSink(tracer) if tracer is not None else None
+    registry = ToolRegistry(policy, interrupt_hook=interrupt_hook, span_sink=span_sink)
     tools: list[Tool] = [
         *build_default_tools(
             guard,
@@ -806,7 +966,7 @@ def build_default_loop(
             search_index_path=search_index_path,
         ),
         *build_write_tools(guard),
-        *build_exec_tools(sandbox or LocalSandbox(guard)),
+        *build_exec_tools(sandbox or LocalSandbox(guard), span_sink=span_sink),
         *build_git_tools(checkpoint),
     ]
     tools.extend(extra_tools or [])
@@ -822,4 +982,5 @@ def build_default_loop(
         cost_rates=cost_rates,
         retriever=retriever,
         interrupt_hook=interrupt_hook,
+        span_sink=span_sink,
     )
