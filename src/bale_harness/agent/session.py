@@ -581,18 +581,32 @@ class SessionStore:
                 ),
             )
 
-    async def load_messages(self, session_id: UUID) -> list[ChatMessage]:
-        await self.init()
-        return await asyncio.to_thread(self._load_messages_sync, session_id)
+    async def load_messages(
+        self, session_id: UUID, *, turn_id: UUID | None = None
+    ) -> list[ChatMessage]:
+        """Load session messages, optionally limited to one turn.
 
-    def _load_messages_sync(self, session_id: UUID) -> list[ChatMessage]:
+        Resuming a turn must pass ``turn_id``: loading the whole session can
+        mix in later turns and let a stale resume complete with another turn's
+        answer.
+        """
+        await self.init()
+        return await asyncio.to_thread(self._load_messages_sync, session_id, turn_id)
+
+    def _load_messages_sync(
+        self, session_id: UUID, turn_id: UUID | None = None
+    ) -> list[ChatMessage]:
         connection = self._connect()
         try:
-            rows = connection.execute(
+            query = (
                 "SELECT role, content, tool_call_id, name, tool_calls_json"
-                " FROM messages WHERE session_id = ? ORDER BY seq",
-                (str(session_id),),
-            ).fetchall()
+                " FROM messages WHERE session_id = ?"
+            )
+            params: list[str] = [str(session_id)]
+            if turn_id is not None:
+                query += " AND turn_id = ?"
+                params.append(str(turn_id))
+            rows = connection.execute(query + " ORDER BY seq", params).fetchall()
         finally:
             connection.close()
         return [

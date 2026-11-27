@@ -183,6 +183,45 @@ def test_cancelled_turn_is_persisted_and_resumes_without_duplicate_write(
     assert [m.content for m in resume_prompt if m.role == "user"] == ["write out.txt"]
 
 
+def test_resume_only_loads_the_target_turn_messages(tmp_path: Path) -> None:
+    async def scenario():
+        store = SessionStore(tmp_path / "sessions.db")
+        session_id = uuid4()
+        cancelled_turn = _turn(tmp_path, "task A", session_id=session_id)
+        event = asyncio.Event()
+        event.set()
+        first_loop = build_default_loop(FakeProvider(), tmp_path, session=store)
+        first = await first_loop.run(cancelled_turn, cancelled=event)
+
+        later_turn = _turn(tmp_path, "task B", session_id=session_id)
+        later_loop = build_default_loop(
+            FakeProvider([ModelResponse(content="answer B")]),
+            tmp_path,
+            session=store,
+        )
+        later = await later_loop.run(later_turn)
+
+        resume_provider = FakeProvider([ModelResponse(content="answer A")])
+        resume_loop = build_default_loop(resume_provider, tmp_path, session=store)
+        resumed = await resume_loop.run(cancelled_turn, resume=True)
+        stored = await store.load_turn(cancelled_turn.turn_id)
+        return first, later, resume_provider, resumed, stored
+
+    first, later, resume_provider, resumed, stored = _run(scenario())
+
+    assert first.status == "cancelled"
+    assert later.status == "completed"
+    assert resumed.status == "completed"
+    assert resumed.resumed is True
+    # The stale turn must answer from its own history, never turn B's answer.
+    assert resumed.answer == "answer A"
+    assert len(resume_provider.calls) == 1
+    resume_prompt = resume_provider.calls[0][0]
+    assert [m.content for m in resume_prompt if m.role == "user"] == ["task A"]
+    assert stored is not None and stored.status == "completed"
+    assert stored.answer == "answer A"
+
+
 def test_resume_without_session_fails(tmp_path: Path) -> None:
     loop = build_default_loop(FakeProvider(), tmp_path)
 

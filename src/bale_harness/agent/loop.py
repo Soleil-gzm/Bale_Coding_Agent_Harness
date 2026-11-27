@@ -568,7 +568,11 @@ class AgentLoop:
             raise SessionError("workspace does not match the stored session")
 
         await self._session.mark_running(record.turn_id)
-        history = await self._session.load_messages(record.session_id)
+        # Only the target turn's messages: a later completed turn must never
+        # leak its answer into this resume and complete the wrong turn.
+        history = await self._session.load_messages(
+            record.session_id, turn_id=record.turn_id
+        )
         executed = await self._session.load_executed(record.turn_id)
         self._registry.seed_executed(executed)
 
