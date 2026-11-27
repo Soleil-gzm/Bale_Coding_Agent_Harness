@@ -146,7 +146,7 @@ bale run \
 - `--approval-mode`：`auto_read`（写/执行一律拒绝）、`approve_write`（默认，写/执行逐次审批）、`approve_all`（全部审批）。
 - 未传 `--yes` 且进程不是交互终端时，写/执行会被拒绝并回报给模型，不会阻塞等待输入。
 - `--shadow-git/--no-shadow-git`（默认开启）：在系统临时目录建立独立 git-dir，为每次迭代创建快照，并把相对基线的 Diff 写入结果的 `diff` 字段；不会读写工作区自己的 `.git`。
-- `shell` 不接受管道、重定向或串联等 shell 元字符，推荐直接传参数数组。`run_tests` 使用当前沙箱的 Python 解释器执行 pytest。
+- `shell` 不接受管道、重定向或串联等 shell 元字符，推荐直接传参数数组。`run_tests` 使用当前沙箱的 Python 解释器执行 pytest；其 `path` 按真实路径校验必须位于工作区，`args` 拒绝 `-p`/`-c`/`-o`/`--basetemp`/`--rootdir`/`--confcutdir`/`--override-ini` 以及绝对路径和 `..` 路径。
 - `LocalSandbox` 是默认执行层，提供命令 deny-list、环境变量白名单、cwd 限定、超时和输出截断，**不是**不可信代码的安全边界。
 
 需要容器隔离时改用 Docker 沙箱：

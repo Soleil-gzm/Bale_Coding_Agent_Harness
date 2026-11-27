@@ -95,7 +95,7 @@ flowchart LR
 | `agent/sandbox.py` | `Sandbox` 端口、`LocalSandbox` 与 `DockerSandbox`：本地 argv 执行，以及每命令一次性容器（无网络、只读根、资源限额、超时清理） | `LocalSandbox` 非安全边界；`DockerSandbox` 依赖宿主 Docker daemon |
 | `agent/checkpoint.py` | `ShadowGit`：独立 git-dir 的基线快照、逐迭代快照、diff 与恢复；可跨进程复用；`Snapshot` 与 `list_snapshots` 只读列出提交，`remove` 删除整个 Checkpoint 目录 | 不读写用户 `.git`；列出不初始化或提交工作区 |
 | `agent/tools/write.py` | `write_file`、`edit_file`、`move_file`、`delete_file`、`apply_patch`：原子写与精确匹配前置校验 | 写副作用，需审批 |
-| `agent/tools/exec.py` | `shell`、`run_tests`：拒绝 shell 元字符，交由 Sandbox 执行 | 执行副作用，需审批 |
+| `agent/tools/exec.py` | `shell`、`run_tests`：拒绝 shell 元字符；`run_tests` 的目标路径经 Guard 校验，危险 pytest 选项与越界路径被拒绝；交由 Sandbox 执行 | 执行副作用，需审批 |
 | `agent/tools/git.py` | `git_diff` 读取 ShadowGit 变更；`finish` 作为完成信号 | 均为只读 |
 | `agent/history.py` | 确定性 token 估算、按 user Turn 分组裁剪、tool 输出压缩、消息配对校验 | 只做纯函数变换 |
 | `agent/context.py` | `TokenBudget`、`ContextBuilder`：稳定系统前缀、记忆与检索片段注入、预算与裁剪 | 只接收已格式化片段，不主动检索 |
