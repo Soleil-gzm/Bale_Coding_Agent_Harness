@@ -474,3 +474,36 @@ def test_eval_freeze_baseline_error_aborts(tmp_path: Path, monkeypatch) -> None:
 
     assert result.exit_code != 0
     assert "boom" in result.output
+
+
+def test_eval_compare_to_e2e(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BALE_PROVIDER", "fake")
+    repo_root = Path(__file__).resolve().parents[1]
+    tasks = repo_root / "examples" / "eval" / "tasks.json"
+    base = tmp_path / "base.json"
+    candidate = tmp_path / "candidate.json"
+
+    first = runner.invoke(
+        app,
+        ["eval", "--allow-local", "--tasks", str(tasks), "--json", str(base)],
+    )
+    assert first.exit_code in (0, 1), first.output
+
+    second = runner.invoke(
+        app,
+        [
+            "eval",
+            "--allow-local",
+            "--tasks",
+            str(tasks),
+            "--compare-to",
+            str(base),
+            "--json",
+            str(candidate),
+        ],
+    )
+    assert second.exit_code in (0, 1), second.output
+
+    data = json.loads(candidate.read_text(encoding="utf-8"))
+    assert data["comparison"] is not None
+    assert data["comparison"]["sample_size"] >= 1

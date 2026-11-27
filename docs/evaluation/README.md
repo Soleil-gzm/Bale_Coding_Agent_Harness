@@ -2,7 +2,7 @@
 
 本目录记录 Bale 的固定任务评测方式与结果记录规范。它是一个**确定性回归 harness**：用固定 fixture、固定消息和文件级断言检查 Agent 是否真的完成了修改，而不是模型排行榜。
 
-> **本文档描述当前已实现的 `bale eval` 行为。** 面向 DR-02 的目标架构、20 个 Golden Tasks、F2P/P2P 防作弊、版本指纹与 baseline 对比见 [Eval 重设计方案](design.md)，该方案标记为“设计待实施”，不代表相关能力已经落地。
+> **本文档描述当前已实现的 `bale eval` 行为。** DR-02 E4 已落地：20 个 Golden Tasks、F2P/P2P 防作弊、五元组版本指纹、hermetic 标记、preflight 数据质量、baseline 冻结与配对比较、CI 结构回归门禁。目标架构与尚未落地的部分（如 oracle 移入沙箱）见 [Eval 重设计方案](design.md)。
 
 ## 它做什么 / 不做什么
 
@@ -10,8 +10,12 @@
 |---|---|
 | 把 fixture 复制到临时工作区，隔离原始文件 | 默认在本机执行任务命令，除非显式传 `--sandbox docker` |
 | 运行一个真实 Turn（含工具调用与审批） | 不自动生成任务、不做 LLM-as-judge |
-| 用 `file_exists` / `file_contains` 等确定性断言判定 | 不比较模型之间的绝对能力，也不承诺跨环境可复现 |
-| 输出 Markdown/JSON 报告与退出码 | 不持久化任务结果或历史趋势 |
+| 用 `file_exists` / `file_contains` 等确定性断言判定 | 不比较模型之间的绝对能力 |
+| 输出 Markdown/JSON 报告与退出码 | 不承诺跨环境可复现（除非用 hermetic docker 运行） |
+| `--sandbox docker` 时禁用网络、标记 `hermetic: true` | |
+| preflight 校验 gold_patch 与 pristine P2P/F2P 数据质量 | |
+| 冻结不可变 baseline 并做配对比较 | |
+| CI 结构回归门禁（fake provider + docker） | |
 
 评测内部固定使用 `auto_approve`，因为工作区是临时副本；这**不代表**生产运行可以关闭审批。
 
@@ -28,6 +32,20 @@ bale eval --tasks examples/eval/tasks.json \
 
 # 官方 golden 套件（20 个任务，read/edit/test/recovery/security = 5/6/3/3/3）
 bale eval --suite examples/eval/golden/suite.json
+
+# 只做数据质量自检（preflight + 分类校验），不执行任务
+bale eval --suite examples/eval/golden/suite.json --validate-only
+
+# 结构回归：脚本化 fake provider + hermetic docker
+bale eval --suite examples/eval/golden/suite.json --provider fake --sandbox docker
+
+# 跑完冻结为不可变 baseline（同名不可覆盖，除非 --supersede-baseline）
+bale eval --suite examples/eval/golden/suite.json --provider fake --sandbox docker \
+  --freeze-baseline golden-v1
+
+# 与 baseline 配对比较
+bale eval --suite examples/eval/golden/suite.json \
+  --compare-to docs/evaluation/baselines/golden-v1.json
 ```
 
 `--suite` 与 `--tasks` 互斥。suite 运行前会做分类数量校验，并对声明了 `gold_patch` 的任务执行数据质量 preflight（`--skip-preflight` 可跳过）。
@@ -115,7 +133,28 @@ passed 2/2 (failed 0, errors 0)
 | `check_results` | 每条断言的结果与说明 |
 | `error` | 失败/异常摘要；`failed` 也可能是「检查未通过」 |
 
-`EvalReport` 汇总 `passed`、`failed`、`errors`、`total` 与逐任务结果；Markdown 由 `render_markdown` 生成。
+`EvalReport` 汇总 `passed`、`failed`、`errors`、`total` 与逐任务结果；Markdown 由 `render_markdown` 生成。报告还携带：
+
+- `manifest.hermetic`：是否为 hermetic 运行（docker + 禁网 + 干净 git 树），Markdown 头部渲染为 `Hermetic: yes/no`。
+- `preflight`：每个声明 `gold_patch` 的任务的数据质量校验结果（pristine F2P/P2P、gold 全通过），Markdown 渲染为 `## Preflight` 表。
+- `metrics`：含 `cost_per_success`、`regression_rate`、`repeated_call_rate` 等；无法计算的指标为 `null` 并在 `coverage` 注明原因。
+
+## Hermetic 与可复现
+
+- `--sandbox docker`（默认）在容器内以 `network=none` 运行，报告 `manifest.hermetic` 标记 `true`；这是发布官方结论的前提。
+- `--sandbox local` 需显式 `--allow-local`，报告标记 `hermetic: false`，仅用于本地调试，不能冻结为官方 baseline。
+- 官方 baseline 还要求 git 工作区干净（`manifest.git.dirty == false`），由 `--freeze-baseline` 强制校验。
+- suite 运行前的 preflight 校验每个 `gold_patch` 可应用、pristine P2P/F2P 与 gold 全通过；失败则终止（`--skip-preflight` 可跳过，但不建议）。
+
+## Baseline 冻结与配对比较
+
+- `bale eval ... --freeze-baseline <name>` 把本次报告冻结到 `docs/evaluation/baselines/<name>.json`，同名不可覆盖。
+- 需替换时用 `--supersede-baseline --baseline-reason "<原因>"`，旧报告归档为 `<name>.superseded.json` 并在 manifest 记录原因（design.md §10.2 规则 6）。
+- `bale eval ... --compare-to <baseline.json>` 做配对比较：五元组指纹不一致判为 `incomparable` 并退出 1；一致则给出 verdict、newly resolved / newly failing 与分类 delta。
+
+## CI 结构回归
+
+每个 PR 跑 `structural-regression` job：用 `--provider fake --sandbox docker` 跑 golden suite 两次，断言基础设施错误率为 0、manifest hermetic、且两次结果确定。它验证 Runtime/工具治理/恢复/安全/eval 流水线的契约行为，而非模型通过率（fake provider 不会修代码）。
 
 ## 证据边界
 
@@ -125,7 +164,7 @@ passed 2/2 (failed 0, errors 0)
 - Provider、`BALE_OPENAI_BASE_URL`、模型名与是否本地。
 - 任务文件路径与 fixture 版本（提交哈希）。
 - 完整命令、`passed/failed/errors`、退出码。
-- 已知限制：无容器隔离、无双跑方差统计、单模型样本小、`file_contains` 是字面匹配。
+- 已知限制：`--sandbox local` 无容器隔离（非 hermetic）、单模型样本小、`file_contains` 是字面匹配；hermetic 结论需用 `--sandbox docker` 并确保干净 git 树。
 
 不要把单次运行写成「模型 X 在 Bale 上通过率 Y%」这类结论；样本量、温度与网络波动都未受控。
 

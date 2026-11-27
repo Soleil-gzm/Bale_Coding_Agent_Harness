@@ -2,7 +2,7 @@
 
 from bale_harness.eval.compare import Comparison
 from bale_harness.eval.metrics import EvalMetrics
-from bale_harness.eval.runner import EvalReport
+from bale_harness.eval.runner import EvalReport, PreflightResult
 
 
 def _cell(text: str, limit: int = 300) -> str:
@@ -14,6 +14,11 @@ def _cell(text: str, limit: int = 300) -> str:
 
 def _marker(passed: bool) -> str:
     return "PASS" if passed else "FAIL"
+
+
+def _hermetic_label(report: EvalReport) -> str:
+    manifest = report.manifest
+    return "yes" if manifest is not None and manifest.hermetic else "no"
 
 
 def _metric_value(value: float | int | None) -> str:
@@ -121,6 +126,27 @@ def _comparison_section(comparison: Comparison) -> list[str]:
     return lines
 
 
+def _preflight_section(results: list[PreflightResult]) -> list[str]:
+    lines = [
+        "",
+        "## Preflight",
+        "",
+        "| Task | OK | Pristine P2P | Gold | Error |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for result in results:
+        if result.pristine_p2p_passed_cases:
+            p2p = f"{len(result.pristine_p2p_passed_cases)} passed"
+        else:
+            p2p = "yes" if result.pristine_p2p_passed else "no"
+        gold = "yes" if result.gold_all_passed else "no"
+        lines.append(
+            f"| `{result.task_id}` | {_marker(result.ok)} | {p2p} "
+            f"| {gold} | {_cell(result.error or '-')} |"
+        )
+    return lines
+
+
 def render_markdown(report: EvalReport) -> str:
     """Render an :class:`EvalReport` as a self-contained Markdown document."""
     result = "PASS" if report.ok else "FAIL"
@@ -129,6 +155,7 @@ def render_markdown(report: EvalReport) -> str:
         "",
         f"- Started: {report.started_at}",
         f"- Duration: {report.duration_ms} ms",
+        f"- Hermetic: {_hermetic_label(report)}",
         f"- Tasks: {report.total} (passed {report.passed}, "
         f"failed {report.failed}, errors {report.errors})",
         f"- Result: {result}",
@@ -136,6 +163,9 @@ def render_markdown(report: EvalReport) -> str:
     ]
     if report.metrics is not None:
         lines.extend(_metrics_section(report.metrics))
+        lines.append("")
+    if report.preflight:
+        lines.extend(_preflight_section(report.preflight))
         lines.append("")
     if report.comparison is not None:
         lines.extend(_comparison_section(report.comparison))
