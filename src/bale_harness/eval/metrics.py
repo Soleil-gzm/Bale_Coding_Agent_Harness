@@ -106,7 +106,34 @@ def compute_metrics(report: EvalReport) -> EvalMetrics:
 
     durations = [outcome.duration_ms for outcome in outcomes]
     coverage["cost_per_success"] = "per-run cost is not priced in this report"
-    coverage["regression_rate"] = "pristine p2p baseline not recorded"
+
+    regression_rate: float | None = None
+    if report.preflight:
+        baseline_by_task: dict[str, set[str]] = {
+            pf.task_id: set(pf.pristine_p2p_passed_cases) for pf in report.preflight
+        }
+        actual_by_task: dict[str, set[str]] = {}
+        for outcome in outcomes:
+            oracle = outcome.oracle
+            if oracle is None or oracle.p2p is None:
+                continue
+            actual_by_task.setdefault(outcome.task_id, set()).update(
+                case.node_id for case in oracle.p2p.cases if case.status == "passed"
+            )
+        total_baseline = 0
+        total_regressed = 0
+        for task_id, baseline in baseline_by_task.items():
+            if not baseline:
+                continue
+            total_baseline += len(baseline)
+            total_regressed += len(baseline - actual_by_task.get(task_id, set()))
+        if total_baseline:
+            regression_rate = total_regressed / total_baseline
+        else:
+            coverage["regression_rate"] = "pristine p2p baseline has no passed cases"
+    else:
+        coverage["regression_rate"] = "pristine p2p baseline not recorded"
+
     coverage["repeated_call_rate"] = "per-call trace not recorded"
 
     return EvalMetrics(
@@ -120,5 +147,6 @@ def compute_metrics(report: EvalReport) -> EvalMetrics:
         infrastructure_error_rate=_rate(errors, scheduled),
         duration_p95_ms=_percentile_95(durations),
         sample_size=len(durations),
+        regression_rate=regression_rate,
         coverage=coverage,
     )

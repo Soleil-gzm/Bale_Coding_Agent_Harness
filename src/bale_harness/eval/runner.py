@@ -79,6 +79,15 @@ class IntegrityOutcome(BaseModel):
     violations: list[ViolationOutcome] = Field(default_factory=list)
 
 
+class OracleCaseOutcome(BaseModel):
+    """A single oracle test case, serializable in the task report."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: str
+    status: str
+
+
 class OracleGroupOutcome(BaseModel):
     """Summary of one oracle group (f2p/p2p/hidden)."""
 
@@ -92,6 +101,7 @@ class OracleGroupOutcome(BaseModel):
     skipped: int = 0
     missing: int = 0
     error: str | None = None
+    cases: list[OracleCaseOutcome] = Field(default_factory=list)
 
 
 class OracleOutcome(BaseModel):
@@ -145,6 +155,7 @@ class EvalReport(BaseModel):
     metrics: EvalMetrics | None = None
     comparison: Comparison | None = None
     manifest: EvalManifest | None = None
+    preflight: list["PreflightResult"] | None = None
 
     @property
     def ok(self) -> bool:
@@ -160,6 +171,7 @@ class PreflightResult(BaseModel):
     ok: bool
     pristine_f2p_failed: bool = False
     pristine_p2p_passed: bool = False
+    pristine_p2p_passed_cases: list[str] = Field(default_factory=list)
     gold_all_passed: bool = False
     error: str | None = None
 
@@ -195,6 +207,9 @@ def _to_oracle_outcome(evaluation: OracleEvaluation) -> OracleOutcome:
             skipped=g.skipped,
             missing=g.missing,
             error=g.error,
+            cases=[
+                OracleCaseOutcome(node_id=c.node_id, status=c.status) for c in g.cases
+            ],
         )
 
     return OracleOutcome(
@@ -564,6 +579,9 @@ def preflight_task(
 
         f2p_failed = pristine_eval.f2p.status == "failed"
         p2p_passed = pristine_eval.p2p.status == "passed"
+        p2p_passed_cases = [
+            c.node_id for c in pristine_eval.p2p.cases if c.status == "passed"
+        ]
         gold_passed = gold_eval.all_passed
         ok = f2p_failed and p2p_passed and gold_passed
 
@@ -583,6 +601,7 @@ def preflight_task(
             ok=ok,
             pristine_f2p_failed=f2p_failed,
             pristine_p2p_passed=p2p_passed,
+            pristine_p2p_passed_cases=p2p_passed_cases,
             gold_all_passed=gold_passed,
             error=error,
         )
@@ -597,6 +616,7 @@ async def run_tasks(
     sandbox_factory: SandboxFactory | None = None,
     evidence_root: Path | None = None,
     repeat: int = 1,
+    preflight_results: list[PreflightResult] | None = None,
 ) -> EvalReport:
     """Run tasks sequentially, each task ``repeat`` times, with fresh workspaces."""
     factory: ProviderFactory = provider_factory or (lambda task: FakeProvider())
@@ -645,6 +665,7 @@ async def run_tasks(
         failed=failed,
         errors=errors,
         outcomes=outcomes,
+        preflight=preflight_results,
     )
     report.metrics = compute_metrics(report)
     return report

@@ -36,7 +36,12 @@ from bale_harness.eval.compare import ComparisonVerdict, compare_reports
 from bale_harness.eval.evidence import EvidenceLayout, write_manifest, write_report
 from bale_harness.eval.manifest import build_manifest
 from bale_harness.eval.report import render_markdown
-from bale_harness.eval.runner import EvalReport, preflight_task, run_tasks
+from bale_harness.eval.runner import (
+    EvalReport,
+    PreflightResult,
+    preflight_task,
+    run_tasks,
+)
 from bale_harness.eval.task import (
     EXPECTED_CATEGORY_COUNTS,
     EvalTaskError,
@@ -379,13 +384,16 @@ def eval_command(
     if not task_list:
         raise typer.BadParameter(f"no tasks in {task_file}")
 
+    preflight_results: list[PreflightResult] | None = None
     if not skip_preflight:
         base_dir = task_file.parent
+        preflight_results = []
         failures: list[str] = []
         for task in task_list:
             if not isinstance(task, EvalTaskV2) or not task.gold_patch:
                 continue
             result = preflight_task(task, base_dir)
+            preflight_results.append(result)
             if not result.ok:
                 failures.append(f"{task.id}: {result.error}")
         if failures:
@@ -448,6 +456,7 @@ def eval_command(
             sandbox_factory,
             evidence_root=layout.root if layout is not None else None,
             repeat=repeat,
+            preflight_results=preflight_results,
         )
     )
     report.manifest = build_manifest(

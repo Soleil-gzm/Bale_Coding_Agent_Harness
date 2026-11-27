@@ -7,8 +7,12 @@ from pathlib import Path
 
 from bale_harness.agent.messages import ModelResponse, ToolCall
 from bale_harness.eval import (
+    EvalReport,
     EvalTask,
     EvalTaskV2,
+    PreflightResult,
+    TaskOutcome,
+    compute_metrics,
     fixture_directory,
     preflight_task,
     render_markdown,
@@ -227,6 +231,8 @@ def test_preflight_passes_for_valid_task(tmp_path: Path) -> None:
     assert result.ok is True
     assert result.pristine_f2p_failed is True
     assert result.pristine_p2p_passed is True
+    assert len(result.pristine_p2p_passed_cases) == 1
+    assert result.pristine_p2p_passed_cases[0].endswith("::test_p2p_basic")
     assert result.gold_all_passed is True
 
 
@@ -307,3 +313,70 @@ def test_preflight_passes_when_hidden_tests_present(tmp_path: Path) -> None:
 
     assert result.ok is True
     assert result.gold_all_passed is True
+
+
+def test_metrics_regression_rate_uses_pristine_p2p_baseline() -> None:
+    from bale_harness.eval.runner import (
+        OracleCaseOutcome,
+        OracleGroupOutcome,
+        OracleOutcome,
+    )
+
+    def make_outcome(task_id: str, passed: list[str], failed: list[str]) -> TaskOutcome:
+        cases = [
+            OracleCaseOutcome(node_id=node, status="passed") for node in passed
+        ] + [OracleCaseOutcome(node_id=node, status="failed") for node in failed]
+        return TaskOutcome(
+            task_id=task_id,
+            status="passed",
+            oracle=OracleOutcome(
+                all_passed=True,
+                has_error=False,
+                f2p=OracleGroupOutcome(name="f2p", status="failed"),
+                p2p=OracleGroupOutcome(name="p2p", status="passed", cases=cases),
+                hidden=OracleGroupOutcome(name="hidden", status="passed"),
+            ),
+        )
+
+    report = EvalReport(
+        started_at="2024-01-01T00:00:00+00:00",
+        duration_ms=10,
+        total=2,
+        passed=2,
+        failed=0,
+        errors=0,
+        outcomes=[
+            make_outcome("t1", passed=["a"], failed=["b"]),
+            make_outcome("t2", passed=["x", "y"], failed=[]),
+        ],
+        preflight=[
+            PreflightResult(
+                task_id="t1",
+                ok=True,
+                pristine_p2p_passed_cases=["a", "b", "c"],
+            ),
+            PreflightResult(
+                task_id="t2", ok=True, pristine_p2p_passed_cases=["x", "y"]
+            ),
+        ],
+    )
+
+    metrics = compute_metrics(report)
+    # t1 baseline {a,b,c} regresses {b,c}; t2 baseline {x,y} regresses nothing.
+    assert metrics.regression_rate == 2 / 5
+
+
+def test_metrics_regression_rate_none_without_preflight() -> None:
+    report = EvalReport(
+        started_at="2024-01-01T00:00:00+00:00",
+        duration_ms=0,
+        total=0,
+        passed=0,
+        failed=0,
+        errors=0,
+        outcomes=[],
+        preflight=None,
+    )
+    metrics = compute_metrics(report)
+    assert metrics.regression_rate is None
+    assert "not recorded" in metrics.coverage["regression_rate"]
