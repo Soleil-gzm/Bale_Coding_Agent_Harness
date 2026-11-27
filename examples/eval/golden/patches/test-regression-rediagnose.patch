@@ -1,0 +1,8 @@
+--- a/tax.py
++++ b/tax.py
+@@ -6,4 +6,4 @@
+ def calc_tax(amount: int, exempt: bool = False) -> float:
+     if exempt:
+         return 0.0
+-    return amount * RATE + 1
++    return amount * RATE

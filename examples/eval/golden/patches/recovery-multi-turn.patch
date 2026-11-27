@@ -1,0 +1,8 @@
+--- a/mul.py
++++ b/mul.py
+@@ -4,4 +4,4 @@
+ def mul(a: int, b: int) -> int:
+     if a == 0 or b == 0:
+-        return 1
++        return 0
+     return a * b

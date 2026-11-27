@@ -1,0 +1,8 @@
+--- a/ship.py
++++ b/ship.py
+@@ -6,4 +6,4 @@
+ def shipping(weight: int) -> int:
+     if weight > 5:
+-        return BASE_FEE + weight - 1
++        return BASE_FEE + weight
+     return BASE_FEE + weight
