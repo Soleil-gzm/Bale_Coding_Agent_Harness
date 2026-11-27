@@ -1,6 +1,8 @@
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from bale_harness.agent.messages import ToolCall
 from bale_harness.agent.security import WorkspaceGuard
 from bale_harness.agent.tools.builtin import (
@@ -146,6 +148,41 @@ def test_search_files_path_escape_denied(tmp_path: Path) -> None:
 
     assert result.status == "error"
     assert result.error_code == "path_escape"
+
+
+def test_search_files_subdirectory_symlink_does_not_escape(
+    tmp_path: Path,
+) -> None:
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-secret.txt"
+    outside.write_text("outside-secret\n", encoding="utf-8")
+    link = sub / "link.txt"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink creation not permitted in this environment")
+
+    result = _run(
+        SearchFilesTool(_guard(tmp_path)).execute(
+            {"pattern": "outside-secret", "path": "sub"}
+        )
+    )
+
+    assert result.status == "success"
+    assert result.metadata["count"] == 0
+    assert "outside-secret" not in result.content
+
+
+def test_search_files_rejects_candidates_outside_the_workspace(
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-root"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("outside-secret\n", encoding="utf-8")
+    tool = SearchFilesTool(_guard(tmp_path))
+
+    assert tool._iter_files(outside) == []
 
 
 def test_registry_executes_builtin_tool(tmp_path: Path) -> None:

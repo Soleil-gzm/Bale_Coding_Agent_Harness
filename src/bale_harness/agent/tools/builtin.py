@@ -203,9 +203,11 @@ class SearchFilesTool(BaseTool):
             if not candidate.is_file():
                 continue
             try:
-                # Re-verify containment so symlinked files cannot escape.
-                self._guard.resolve(candidate.relative_to(root))
-            except (ValueError, WorkspaceError):
+                # Resolve first, then compare against the workspace root: a
+                # relative_to(root) check would validate the link path instead
+                # of its target when ``path`` points at a subdirectory.
+                candidate.resolve().relative_to(self._guard.root)
+            except (OSError, RuntimeError, ValueError):
                 continue
             files.append(candidate)
         return files
