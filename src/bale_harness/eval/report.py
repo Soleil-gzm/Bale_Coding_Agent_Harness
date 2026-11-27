@@ -58,12 +58,20 @@ def _metrics_section(metrics: EvalMetrics) -> list[str]:
         ),
     ]
     for name, value, note in (
-        ("cost per success", metrics.cost_per_success, coverage["cost_per_success"]),
-        ("regression rate", metrics.regression_rate, coverage["regression_rate"]),
+        (
+            "cost per success",
+            metrics.cost_per_success,
+            coverage.get("cost_per_success", ""),
+        ),
+        (
+            "regression rate",
+            metrics.regression_rate,
+            coverage.get("regression_rate", ""),
+        ),
         (
             "repeated call rate",
             metrics.repeated_call_rate,
-            coverage["repeated_call_rate"],
+            coverage.get("repeated_call_rate", ""),
         ),
     ):
         rows.append((name, _metric_value(value), note))

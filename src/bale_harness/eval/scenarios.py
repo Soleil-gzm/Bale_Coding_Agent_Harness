@@ -18,10 +18,12 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from bale_harness.agent.approval import PolicyApprover, auto_approve
+from bale_harness.agent.cost import CostRates
 from bale_harness.agent.loop import build_default_loop
 from bale_harness.agent.messages import ToolCall, ToolSpec
 from bale_harness.agent.session import SessionStore
 from bale_harness.agent.tools.registry import InterruptHook
+from bale_harness.agent.trace import TraceExporter
 from bale_harness.contracts import ToolResult, Turn
 from bale_harness.eval.interrupt import InterruptController
 
@@ -65,6 +67,7 @@ class ScenarioResult(BaseModel):
     used_tools: list[str] = Field(default_factory=list)
     side_effects_triggered: list[str] = Field(default_factory=list)
     contract_violations: list[str] = Field(default_factory=list)
+    estimated_cost: float | None = None
 
 
 def _command_text(call: ToolCall) -> str:
@@ -183,6 +186,8 @@ def _build_loop(
     interrupt_hook: InterruptHook | None,
     extra_tools: Sequence[Tool] | None = None,
     session: SessionStore | None = None,
+    tracer: TraceExporter | None = None,
+    cost_rates: CostRates | None = None,
 ):
     return build_default_loop(
         provider,
@@ -192,6 +197,8 @@ def _build_loop(
         interrupt_hook=interrupt_hook,
         extra_tools=extra_tools,
         session=session,
+        tracer=tracer,
+        cost_rates=cost_rates,
     )
 
 
@@ -235,6 +242,7 @@ def _finalize(
         used_tools=sorted(auditor.executed_tools),
         side_effects_triggered=triggered,
         contract_violations=violations,
+        estimated_cost=getattr(result, "estimated_cost", None),
     )
 
 
@@ -245,22 +253,50 @@ async def run_scenario(
     sandbox_factory: SandboxFactory | None,
     *,
     extra_tools: Sequence[Tool] | None = None,
+    tracer: TraceExporter | None = None,
+    cost_rates: CostRates | None = None,
 ) -> ScenarioResult:
     """Dispatch ``task`` to the executor for ``task.scenario.type``."""
     scenario_type = task.scenario.type
     if scenario_type == "single":
         return await _run_single(
-            task, workspace, provider, sandbox_factory, extra_tools
+            task,
+            workspace,
+            provider,
+            sandbox_factory,
+            extra_tools,
+            tracer=tracer,
+            cost_rates=cost_rates,
         )
     if scenario_type == "retry":
-        return await _run_retry(task, workspace, provider, sandbox_factory, extra_tools)
+        return await _run_retry(
+            task,
+            workspace,
+            provider,
+            sandbox_factory,
+            extra_tools,
+            tracer=tracer,
+            cost_rates=cost_rates,
+        )
     if scenario_type == "recovery":
         return await _run_recovery(
-            task, workspace, provider, sandbox_factory, extra_tools
+            task,
+            workspace,
+            provider,
+            sandbox_factory,
+            extra_tools,
+            tracer=tracer,
+            cost_rates=cost_rates,
         )
     if scenario_type == "security":
         return await _run_security(
-            task, workspace, provider, sandbox_factory, extra_tools
+            task,
+            workspace,
+            provider,
+            sandbox_factory,
+            extra_tools,
+            tracer=tracer,
+            cost_rates=cost_rates,
         )
     raise ValueError(f"unknown scenario type: {scenario_type}")
 
@@ -275,6 +311,8 @@ async def _run_single(
     controller: InterruptHook | None = None,
     approval_mode: str = "approve_write",
     decider: Any = auto_approve,
+    tracer: TraceExporter | None = None,
+    cost_rates: CostRates | None = None,
 ) -> ScenarioResult:
     auditor = SideEffectAuditor()
     enforcer = _build_approver(task, approval_mode=approval_mode, decider=decider)
@@ -286,6 +324,8 @@ async def _run_single(
         approver=enforcer,
         interrupt_hook=CompositeInterruptHook(controller, auditor),
         extra_tools=extra_tools,
+        tracer=tracer,
+        cost_rates=cost_rates,
     )
     cancelled = getattr(controller, "cancelled", None)
     result = await loop.run(_make_turn(task, workspace), cancelled=cancelled)
@@ -298,10 +338,21 @@ async def _run_retry(
     provider: ModelProvider,
     sandbox_factory: SandboxFactory | None,
     extra_tools: Sequence[Tool] | None = None,
+    *,
+    tracer: TraceExporter | None = None,
+    cost_rates: CostRates | None = None,
 ) -> ScenarioResult:
     # Skeleton: a single attempt for now; real multi-round retry orchestration
     # lands together with the E2 retry task fixtures.
-    return await _run_single(task, workspace, provider, sandbox_factory, extra_tools)
+    return await _run_single(
+        task,
+        workspace,
+        provider,
+        sandbox_factory,
+        extra_tools,
+        tracer=tracer,
+        cost_rates=cost_rates,
+    )
 
 
 async def _run_recovery(
@@ -310,11 +361,20 @@ async def _run_recovery(
     provider: ModelProvider,
     sandbox_factory: SandboxFactory | None,
     extra_tools: Sequence[Tool] | None = None,
+    *,
+    tracer: TraceExporter | None = None,
+    cost_rates: CostRates | None = None,
 ) -> ScenarioResult:
     spec = task.scenario.interrupt
     if spec is None:
         return await _run_single(
-            task, workspace, provider, sandbox_factory, extra_tools
+            task,
+            workspace,
+            provider,
+            sandbox_factory,
+            extra_tools,
+            tracer=tracer,
+            cost_rates=cost_rates,
         )
 
     controller = InterruptController(spec)
@@ -332,6 +392,8 @@ async def _run_recovery(
         interrupt_hook=CompositeInterruptHook(controller, auditor),
         extra_tools=extra_tools,
         session=store,
+        tracer=tracer,
+        cost_rates=cost_rates,
     )
     first = await first_loop.run(turn, cancelled=controller.cancelled)
     if first.status != "cancelled":
@@ -348,6 +410,8 @@ async def _run_recovery(
         interrupt_hook=CompositeInterruptHook(None, auditor),
         extra_tools=extra_tools,
         session=store,
+        tracer=tracer,
+        cost_rates=cost_rates,
     )
     resumed = await resume_loop.run(turn, resume=True)
     return _finalize(resumed, auditor, enforcer, task)
@@ -359,6 +423,9 @@ async def _run_security(
     provider: ModelProvider,
     sandbox_factory: SandboxFactory | None,
     extra_tools: Sequence[Tool] | None = None,
+    *,
+    tracer: TraceExporter | None = None,
+    cost_rates: CostRates | None = None,
 ) -> ScenarioResult:
     # Fail-closed: only read tools run; every side effect is audited against
     # task.integrity.forbidden_side_effects.
@@ -370,4 +437,6 @@ async def _run_security(
         extra_tools,
         approval_mode="auto_read",
         decider=None,
+        tracer=tracer,
+        cost_rates=cost_rates,
     )

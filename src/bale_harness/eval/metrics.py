@@ -105,7 +105,23 @@ def compute_metrics(report: EvalReport) -> EvalMetrics:
         coverage["security_violation_rate"] = "no security tasks in this report"
 
     durations = [outcome.duration_ms for outcome in outcomes]
-    coverage["cost_per_success"] = "per-run cost is not priced in this report"
+
+    cost_per_success: float | None = None
+    priced = [
+        outcome.estimated_cost
+        for outcome in outcomes
+        if outcome.estimated_cost is not None
+    ]
+    if priced:
+        success_costs = [
+            outcome.estimated_cost
+            for outcome in outcomes
+            if outcome.status == "passed" and outcome.estimated_cost is not None
+        ]
+        if success_costs:
+            cost_per_success = sum(success_costs) / len(success_costs)
+    else:
+        coverage["cost_per_success"] = "per-run cost is not priced in this report"
 
     regression_rate: float | None = None
     if report.preflight:
@@ -134,7 +150,16 @@ def compute_metrics(report: EvalReport) -> EvalMetrics:
     else:
         coverage["regression_rate"] = "pristine p2p baseline not recorded"
 
-    coverage["repeated_call_rate"] = "per-call trace not recorded"
+    repeated_call_rate: float | None = None
+    traced = [
+        outcome for outcome in outcomes if outcome.repeated_tool_calls is not None
+    ]
+    if traced:
+        total_calls = sum(outcome.tool_calls for outcome in traced)
+        repeated_total = sum(outcome.repeated_tool_calls or 0 for outcome in traced)
+        repeated_call_rate = repeated_total / total_calls if total_calls else 0.0
+    else:
+        coverage["repeated_call_rate"] = "per-call trace not recorded"
 
     return EvalMetrics(
         scheduled=scheduled,
@@ -147,6 +172,8 @@ def compute_metrics(report: EvalReport) -> EvalMetrics:
         infrastructure_error_rate=_rate(errors, scheduled),
         duration_p95_ms=_percentile_95(durations),
         sample_size=len(durations),
+        cost_per_success=cost_per_success,
         regression_rate=regression_rate,
+        repeated_call_rate=repeated_call_rate,
         coverage=coverage,
     )

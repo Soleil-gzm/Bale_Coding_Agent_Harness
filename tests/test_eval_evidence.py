@@ -113,7 +113,7 @@ def test_v2_task_evidence_layout(tmp_path: Path) -> None:
     assert "-    return a + b + 1" in diff
 
 
-def test_v1_task_writes_only_outcome(tmp_path: Path) -> None:
+def test_v1_task_writes_outcome_and_trace(tmp_path: Path) -> None:
     base = _make_base(tmp_path)
     artifacts = tmp_path / "artifacts"
     task = EvalTask.model_validate(
@@ -140,7 +140,7 @@ def test_v1_task_writes_only_outcome(tmp_path: Path) -> None:
     files = sorted(
         path.name for path in (artifacts / "tasks" / "v1-demo" / "0").iterdir()
     )
-    assert files == ["outcome.json"]
+    assert files == ["outcome.json", "trace.jsonl"]
 
 
 def test_manifest_and_report_artifacts_roundtrip(tmp_path: Path) -> None:

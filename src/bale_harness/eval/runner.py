@@ -25,9 +25,15 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from bale_harness.agent.approval import auto_approve
+from bale_harness.agent.cost import CostRates
 from bale_harness.agent.loop import build_default_loop
 from bale_harness.agent.sandbox import Sandbox
 from bale_harness.agent.security import WorkspaceError, WorkspaceGuard
+from bale_harness.agent.trace import (
+    JsonlTraceExporter,
+    read_trace,
+    repeated_tool_calls,
+)
 from bale_harness.contracts import Turn
 from bale_harness.eval.compare import Comparison
 from bale_harness.eval.evidence import EvidenceLayout, write_task_evidence
@@ -137,6 +143,8 @@ class TaskOutcome(BaseModel):
     oracle: OracleOutcome | None = None
     integrity: IntegrityOutcome | None = None
     contract_violations: list[str] = Field(default_factory=list)
+    estimated_cost: float | None = None
+    repeated_tool_calls: int | None = None
 
 
 class EvalReport(BaseModel):
@@ -327,13 +335,27 @@ async def run_task(
     sandbox_factory: SandboxFactory | None = None,
     base_dir: Path | None = None,
     evidence_dir: Path | None = None,
+    cost_rates: CostRates | None = None,
 ) -> TaskOutcome:
     """Run one task; v2 tasks use the three-workspace integrity/oracle flow."""
     if isinstance(task, EvalTaskV2):
         return await _run_v2_task(
-            task, fixture, provider, sandbox_factory, base_dir, evidence_dir
+            task,
+            fixture,
+            provider,
+            sandbox_factory,
+            base_dir,
+            evidence_dir,
+            cost_rates=cost_rates,
         )
-    return await _run_v1_task(task, fixture, provider, sandbox_factory, evidence_dir)
+    return await _run_v1_task(
+        task,
+        fixture,
+        provider,
+        sandbox_factory,
+        evidence_dir,
+        cost_rates=cost_rates,
+    )
 
 
 async def _run_v1_task(
@@ -342,6 +364,7 @@ async def _run_v1_task(
     provider: ModelProvider,
     sandbox_factory: SandboxFactory | None,
     evidence_dir: Path | None = None,
+    cost_rates: CostRates | None = None,
 ) -> TaskOutcome:
     """Legacy single-workspace execution: copy fixture, run agent, check files."""
     started = time.perf_counter()
@@ -349,11 +372,15 @@ async def _run_v1_task(
     workspace = temp_root / "workspace"
     try:
         shutil.copytree(fixture, workspace)
+        trace_path = evidence_dir / "trace.jsonl" if evidence_dir is not None else None
+        tracer = JsonlTraceExporter(trace_path) if trace_path is not None else None
         loop = build_default_loop(
             provider,
             workspace,
             approver=auto_approve,
             sandbox=sandbox_factory(workspace) if sandbox_factory else None,
+            tracer=tracer,
+            cost_rates=cost_rates,
         )
         turn = Turn(
             message=task.message,
@@ -363,6 +390,11 @@ async def _run_v1_task(
             time_budget=task.time_budget,
         )
         result = await loop.run(turn)
+        repeated = (
+            repeated_tool_calls(read_trace(trace_path))
+            if trace_path is not None
+            else None
+        )
         check_results = evaluate_checks(workspace, task.checks)
         failed_checks = [item for item in check_results if not item.passed]
         if result.status != "completed":
@@ -387,6 +419,8 @@ async def _run_v1_task(
             total_tokens=result.usage.total_tokens,
             duration_ms=_elapsed_ms(started),
             check_results=check_results,
+            estimated_cost=result.estimated_cost,
+            repeated_tool_calls=repeated,
         )
         if evidence_dir is not None:
             write_task_evidence(evidence_dir, outcome)
@@ -413,6 +447,7 @@ async def _run_v2_task(
     sandbox_factory: SandboxFactory | None,
     base_dir: Path | None = None,
     evidence_dir: Path | None = None,
+    cost_rates: CostRates | None = None,
 ) -> TaskOutcome:
     """Three-workspace execution: pristine diff, integrity gate, oracle verify."""
     started = time.perf_counter()
@@ -428,7 +463,17 @@ async def _run_v2_task(
         _copy_tree(fixture, workspace)
         env = build_eval_env()
 
-        scenario_result = await run_scenario(task, workspace, provider, sandbox_factory)
+        trace_path = evidence / "trace.jsonl"
+        tracer = JsonlTraceExporter(trace_path)
+        scenario_result = await run_scenario(
+            task,
+            workspace,
+            provider,
+            sandbox_factory,
+            tracer=tracer,
+            cost_rates=cost_rates,
+        )
+        repeated = repeated_tool_calls(read_trace(trace_path))
 
         integrity_result = check_integrity(pristine, workspace, task.integrity)
         integrity_outcome = _to_integrity_outcome(integrity_result)
@@ -483,6 +528,8 @@ async def _run_v2_task(
             oracle=oracle_outcome,
             integrity=integrity_outcome,
             contract_violations=list(scenario_result.contract_violations),
+            estimated_cost=scenario_result.estimated_cost,
+            repeated_tool_calls=repeated,
         )
         if evidence_dir is not None:
             write_task_evidence(
@@ -617,6 +664,7 @@ async def run_tasks(
     evidence_root: Path | None = None,
     repeat: int = 1,
     preflight_results: list[PreflightResult] | None = None,
+    cost_rates: CostRates | None = None,
 ) -> EvalReport:
     """Run tasks sequentially, each task ``repeat`` times, with fresh workspaces."""
     factory: ProviderFactory = provider_factory or (lambda task: FakeProvider())
@@ -650,6 +698,7 @@ async def run_tasks(
                 sandbox_factory,
                 base_dir,
                 evidence_dir,
+                cost_rates=cost_rates,
             )
             outcome.repeat_index = repeat_index
             outcomes.append(outcome)

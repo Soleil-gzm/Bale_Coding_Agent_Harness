@@ -12,7 +12,7 @@ import typer
 
 from bale_harness.agent.approval import Decider, auto_approve
 from bale_harness.agent.checkpoint import ShadowGit, ShadowGitError
-from bale_harness.agent.cost import CostRates
+from bale_harness.agent.cost import cost_rates_from_settings
 from bale_harness.agent.loop import AgentLoop, RunResult, build_default_loop
 from bale_harness.agent.messages import ToolCall, ToolSpec
 from bale_harness.agent.report import build_report, markdown_to_html
@@ -90,16 +90,6 @@ async def _execute(
 async def _load_resumable(session: SessionStore, session_id: UUID) -> TurnRecord | None:
     await session.init()
     return await session.load_resumable_turn(session_id)
-
-
-def _cost_rates(settings: Settings) -> CostRates | None:
-    """Build cost rates only when both prices are configured."""
-    if settings.input_cost_per_1k is None or settings.output_cost_per_1k is None:
-        return None
-    return CostRates(
-        input_per_1k=settings.input_cost_per_1k,
-        output_per_1k=settings.output_cost_per_1k,
-    )
 
 
 async def _collect_report(
@@ -457,6 +447,7 @@ def eval_command(
             evidence_root=layout.root if layout is not None else None,
             repeat=repeat,
             preflight_results=preflight_results,
+            cost_rates=cost_rates_from_settings(settings),
         )
     )
     report.manifest = build_manifest(
@@ -691,7 +682,7 @@ def run_command(
                 session=session,
                 context_window=settings.context_window,
                 tracer=tracer,
-                cost_rates=_cost_rates(settings),
+                cost_rates=cost_rates_from_settings(settings),
                 extra_tools=extra_tools,
                 retriever=retriever,
                 search_embedder=search_embedder,
@@ -996,7 +987,7 @@ def chat_command(
                 checkpoint=checkpoint,
                 session=SessionStore(session_db) if session_db is not None else None,
                 context_window=settings.context_window,
-                cost_rates=_cost_rates(settings),
+                cost_rates=cost_rates_from_settings(settings),
                 extra_tools=extra_tools,
                 retriever=retriever,
                 search_embedder=search_embedder,

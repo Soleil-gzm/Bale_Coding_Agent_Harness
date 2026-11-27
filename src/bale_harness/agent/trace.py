@@ -250,3 +250,18 @@ def read_trace(path: str | Path) -> list[TraceEvent]:
         except Exception:  # partial or corrupt lines are ignored
             continue
     return events
+
+
+def repeated_tool_calls(events: list[TraceEvent]) -> int:
+    """Count tool calls that repeat a tool already invoked in the same run.
+
+    The first call to each tool is free; every later invocation of the same
+    tool counts as one repeated call. Non-``tool_call`` events are ignored, so
+    this is safe to run over a full trace.
+    """
+    counts: dict[str, int] = {}
+    for event in events:
+        if event.event != "tool_call" or event.name is None:
+            continue
+        counts[event.name] = counts.get(event.name, 0) + 1
+    return sum(max(0, count - 1) for count in counts.values())

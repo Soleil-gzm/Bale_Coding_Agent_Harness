@@ -3,9 +3,13 @@
 import asyncio
 import difflib
 import sys
+import types
+import uuid
 from pathlib import Path
 
+from bale_harness.agent.cost import cost_rates_from_settings
 from bale_harness.agent.messages import ModelResponse, ToolCall
+from bale_harness.agent.trace import TraceEvent, repeated_tool_calls
 from bale_harness.eval import (
     EvalReport,
     EvalTask,
@@ -380,3 +384,103 @@ def test_metrics_regression_rate_none_without_preflight() -> None:
     metrics = compute_metrics(report)
     assert metrics.regression_rate is None
     assert "not recorded" in metrics.coverage["regression_rate"]
+
+
+def test_cost_rates_from_settings_returns_none_without_prices() -> None:
+    settings = types.SimpleNamespace(input_cost_per_1k=None, output_cost_per_1k=0.002)
+    assert cost_rates_from_settings(settings) is None
+
+
+def test_cost_rates_from_settings_builds_rates() -> None:
+    settings = types.SimpleNamespace(input_cost_per_1k=0.001, output_cost_per_1k=0.002)
+    rates = cost_rates_from_settings(settings)
+    assert rates is not None
+    assert rates.input_per_1k == 0.001
+    assert rates.output_per_1k == 0.002
+
+
+def test_repeated_tool_calls_counts_only_repeats() -> None:
+    turn = uuid.UUID(int=1)
+
+    def ev(name: str, seq: int) -> TraceEvent:
+        return TraceEvent(
+            seq=seq,
+            ts="2024-01-01T00:00:00+00:00",
+            event="tool_call",
+            turn_id=turn,
+            name=name,
+        )
+
+    events = [
+        ev("read_file", 1),
+        ev("write_file", 2),
+        ev("read_file", 3),  # repeat
+        ev("read_file", 4),  # repeat
+        ev("grep", 5),
+    ]
+    # read_file called 3x -> 2 repeats; the others are first calls.
+    assert repeated_tool_calls(events) == 2
+
+
+def test_metrics_cost_per_success_averages_passed_costs() -> None:
+    report = EvalReport(
+        started_at="2024-01-01T00:00:00+00:00",
+        duration_ms=0,
+        total=3,
+        passed=2,
+        failed=1,
+        errors=0,
+        outcomes=[
+            TaskOutcome(task_id="t1", status="passed", estimated_cost=1.0),
+            TaskOutcome(task_id="t2", status="passed", estimated_cost=3.0),
+            TaskOutcome(task_id="t3", status="failed", estimated_cost=5.0),
+        ],
+    )
+    metrics = compute_metrics(report)
+    # only passed outcomes count: (1.0 + 3.0) / 2 = 2.0
+    assert metrics.cost_per_success == 2.0
+    assert "cost_per_success" not in metrics.coverage
+
+
+def test_metrics_repeated_call_rate_from_trace() -> None:
+    report = EvalReport(
+        started_at="2024-01-01T00:00:00+00:00",
+        duration_ms=0,
+        total=2,
+        passed=2,
+        failed=0,
+        errors=0,
+        outcomes=[
+            TaskOutcome(
+                task_id="t1",
+                status="passed",
+                tool_calls=5,
+                repeated_tool_calls=2,
+            ),
+            TaskOutcome(
+                task_id="t2",
+                status="passed",
+                tool_calls=3,
+                repeated_tool_calls=0,
+            ),
+        ],
+    )
+    metrics = compute_metrics(report)
+    # 2 repeats / 8 total tool calls = 0.25
+    assert metrics.repeated_call_rate == 0.25
+    assert "repeated_call_rate" not in metrics.coverage
+
+
+def test_metrics_repeated_call_rate_none_without_trace() -> None:
+    report = EvalReport(
+        started_at="2024-01-01T00:00:00+00:00",
+        duration_ms=0,
+        total=1,
+        passed=1,
+        failed=0,
+        errors=0,
+        outcomes=[TaskOutcome(task_id="t1", status="passed", tool_calls=4)],
+    )
+    metrics = compute_metrics(report)
+    assert metrics.repeated_call_rate is None
+    assert "not recorded" in metrics.coverage["repeated_call_rate"]
