@@ -199,7 +199,7 @@ bale run \
 - 执行前已记录 `pending`、但没有结果的调用不会被重放，而是合成 `outcome_unknown` 的 tool 消息回注模型。
 - 每个 Turn 完成（`completed`）后写入一条有界记忆摘要；下个 Turn 的稳定系统前缀会包含最近 5 条。
 - Token 预算分两层：`turn.token_budget`（累计 `total_tokens` 上限）与 `BALE_CONTEXT_WINDOW`（上下文窗口裁剪）。Token 数为确定性估算，不等于 Provider 计费值。
-- `turn.time_budget` 是 wall-clock 上限（秒，必须大于 0）。Loop 在迭代边界检查，并用剩余时间限制单次模型调用；超时以 `failed` 和 `time budget exceeded` 结束，工具调用仍受各自 `timeout_ms` 约束。
+- `turn.time_budget` 是 wall-clock 上限（秒，必须大于 0）。Loop 在迭代边界检查，并用剩余时间限制单次模型调用；超时以 `failed` 和 `time budget exceeded` 结束。Provider 自身的读/传输超时不计为预算耗尽，会以 `model request timed out` 失败，并由 OpenAI Provider 按 `max_retries` 重试；工具调用仍受各自 `timeout_ms` 约束。
 - 传入 `--session-db` 或 `--checkpoint-dir` 时，ShadowGit git-dir 会持久化到 `<session_db 父目录>/checkpoints/<session_id>`；否则仍使用进程临时目录。
 
 ### 4.4 追踪与成本
