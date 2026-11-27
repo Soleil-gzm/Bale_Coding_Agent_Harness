@@ -420,6 +420,7 @@ def eval_command(
         raise typer.BadParameter(str(error)) from error
     if not task_list:
         raise typer.BadParameter(f"no tasks in {task_file}")
+    task_file = task_file.resolve()
 
     preflight_results: list[PreflightResult] | None = None
     if not skip_preflight:

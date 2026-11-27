@@ -582,7 +582,7 @@ def preflight_task(
         return PreflightResult(
             task_id=task.id, ok=False, error="gold_patch is required for preflight"
         )
-    gold_path = Path(base_dir) / task.gold_patch
+    gold_path = (Path(base_dir) / task.gold_patch).resolve()
     if not gold_path.is_file():
         return PreflightResult(
             task_id=task.id,

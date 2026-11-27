@@ -30,3 +30,75 @@ jobs:
         run: pytest -q
       - name: Compile MCP example
         run: python -m compileall examples
+
+  structural-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Install locked dependencies
+        run: python -m pip install --require-hashes -r requirements.lock
+      - name: Install package
+        run: python -m pip install --no-deps .
+      - name: Run structural regression
+        env:
+          BALE_PROVIDER: fake
+        run: |
+          set +e
+          bale eval --suite examples/eval/golden/suite.json \
+            --provider fake --sandbox docker \
+            --artifacts-dir artifacts/structural-run1 \
+            --json reports/structural-run1.json
+          code1=$?
+          bale eval --suite examples/eval/golden/suite.json \
+            --provider fake --sandbox docker \
+            --artifacts-dir artifacts/structural-run2 \
+            --json reports/structural-run2.json
+          code2=$?
+          set -e
+          test "$code1" = "$code2" || {
+            echo "non-deterministic exit code: $code1 vs $code2"
+            exit 1
+          }
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          def load(label: str):
+              path = Path(f"reports/structural-{label}.json")
+              assert path.is_file(), f"{label}: report not written (eval crashed?)"
+              return json.loads(path.read_text(encoding="utf-8"))
+
+          def contract(report, label: str):
+              assert report["errors"] == 0, f"{label}: errors={report['errors']}"
+              metrics = report["metrics"]
+              assert metrics["infrastructure_error_rate"] == 0, (
+                  f"{label}: infrastructure_error_rate="
+                  f"{metrics['infrastructure_error_rate']}"
+              )
+              manifest = report["manifest"]
+              assert manifest["hermetic"] is True, f"{label}: not hermetic"
+              assert manifest["sandbox"]["backend"] == "docker", (
+                  f"{label}: sandbox={manifest['sandbox']['backend']}"
+              )
+              return (report["passed"], report["failed"], report["total"])
+
+          summary1 = contract(load("run1"), "run1")
+          summary2 = contract(load("run2"), "run2")
+          assert summary1 == summary2, (
+              f"non-deterministic structural run: {summary1} vs {summary2}"
+          )
+          # FakeProvider cannot repair code; a clean run still has model failures
+          # but must never produce infrastructure errors.
+          assert summary1[1] > 0, "expected model failures under fake provider"
+          print(
+              f"structural regression OK: {summary1[0]} passed, "
+              f"{summary1[1]} failed, 0 errors (deterministic, hermetic docker)"
+          )
+          PY
