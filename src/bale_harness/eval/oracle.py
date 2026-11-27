@@ -138,6 +138,9 @@ def run_command(
     argv = list(argv)
     is_pytest = _is_pytest_command(argv)
     if is_pytest and junit_path is not None:
+        # pytest writes the report relative to its own cwd, which is not the
+        # harness cwd; pin the report path so parsing finds it afterwards.
+        junit_path = Path(junit_path).resolve()
         argv = argv + [f"--junitxml={junit_path}", "-p", "no:cacheprovider"]
 
     start = time.monotonic()
@@ -228,6 +231,7 @@ def evaluate_group(
 ) -> OracleGroupResult:
     """Run one oracle group's commands and aggregate their JUnit results."""
     run_env = env if env is not None else build_eval_env()
+    evidence_dir = Path(evidence_dir).resolve()
     all_cases: list[TestCaseResult] = []
     error_msg: str | None = None
 

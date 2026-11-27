@@ -13,6 +13,11 @@ runner = CliRunner()
 VALID_COUNTS = {"read": 5, "edit": 6, "test": 3, "recovery": 3, "security": 3}
 
 
+def _output(result) -> str:
+    """Combine stdout and stderr: Click 8.2+ routes usage errors to stderr."""
+    return result.output + (getattr(result, "stderr", "") or "")
+
+
 def _make_task(task_id: str, category: str, **extra: Any) -> dict[str, Any]:
     task: dict[str, Any] = {
         "id": task_id,
@@ -132,7 +137,7 @@ def test_eval_tasks_and_suite_are_mutually_exclusive(
     )
 
     assert result.exit_code != 0
-    assert "exactly one of --tasks or --suite" in result.output
+    assert "exactly one of --tasks or --suite" in _output(result)
 
 
 def test_eval_requires_either_tasks_or_suite(tmp_path: Path, monkeypatch) -> None:
@@ -141,7 +146,7 @@ def test_eval_requires_either_tasks_or_suite(tmp_path: Path, monkeypatch) -> Non
     result = runner.invoke(app, ["eval"])
 
     assert result.exit_code != 0
-    assert "exactly one of --tasks or --suite" in result.output
+    assert "exactly one of --tasks or --suite" in _output(result)
 
 
 def test_eval_preflight_failure_aborts_before_run(tmp_path: Path, monkeypatch) -> None:
@@ -345,7 +350,7 @@ def test_eval_treatment_requires_compare_to(tmp_path: Path, monkeypatch) -> None
     )
 
     assert result.exit_code != 0
-    assert "--treatment requires --compare-to" in result.output
+    assert "--treatment requires --compare-to" in _output(result)
 
 
 def test_eval_local_requires_allow_local(tmp_path: Path, monkeypatch) -> None:
@@ -357,7 +362,7 @@ def test_eval_local_requires_allow_local(tmp_path: Path, monkeypatch) -> None:
     )
 
     assert result.exit_code != 0
-    assert "--allow-local" in result.output
+    assert "--allow-local" in _output(result)
 
 
 def test_eval_local_with_allow_local_runs(tmp_path: Path, monkeypatch) -> None:

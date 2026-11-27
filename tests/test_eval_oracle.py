@@ -140,3 +140,22 @@ def test_empty_group_passes(tmp_path: Path) -> None:
 
     assert group.status == "passed"
     assert group.total == 0
+
+
+def test_relative_evidence_dir_still_finds_junit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ws = _make_workspace(tmp_path, fixed=True)
+    monkeypatch.chdir(tmp_path)
+
+    group = evaluate_group(
+        [PY + ["tests/test_pricing.py"]],
+        None,
+        verification_dir=ws,
+        evidence_dir=Path("relative-evidence"),
+        name="f2p",
+        env=build_eval_env(),
+    )
+
+    assert group.status == "passed", group.error
+    assert (tmp_path / "relative-evidence" / "f2p_0.xml").is_file()
