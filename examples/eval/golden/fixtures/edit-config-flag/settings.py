@@ -1,0 +1,2 @@
+DEBUG = True
+TIMEOUT_SECONDS = 30

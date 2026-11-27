@@ -1,0 +1,6 @@
+--- a/settings.py
++++ b/settings.py
+@@ -1,2 +1,2 @@
+-DEBUG = True
++DEBUG = False
+ TIMEOUT_SECONDS = 30

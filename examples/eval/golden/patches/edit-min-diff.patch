@@ -1,0 +1,10 @@
+--- a/stages.py
++++ b/stages.py
+@@ -1,6 +1,6 @@
+ """Pipeline stages."""
+ 
+-RETRIES = 5
++RETRIES = 3
+ 
+ 
+ def run_stage(name: str) -> str:
