@@ -101,10 +101,10 @@ flowchart LR
 | `agent/context.py` | `TokenBudget`、`ContextBuilder`：稳定系统前缀、记忆与检索片段注入、预算与裁剪 | 只接收已格式化片段，不主动检索 |
 | `agent/session.py` | `SessionStore`：SQLite 中的 Session、Turn、消息、已执行调用与记忆；写前意图、写后收敛 | 单机本地持久化，不提供多进程协调 |
 | `agent/memory.py` | `after_turn` fast curator：`Task/Outcome` 有界摘要 | 仅 completed 且 best-effort |
-| `agent/trace.py` | `TraceEvent`、`TraceExporter` 协议、`JsonlTraceExporter` 与 `NullTraceExporter`：追加写、序号递增、脱敏、失败不阻断、可选按大小轮转 | 本地 JSONL，无采样或远程导出 |
+| `agent/trace.py` | `TraceEvent`、`TraceExporter` 协议、`SpanSink`/`TraceSpanSink`、`JsonlTraceExporter` 与 `NullTraceExporter`：追加写、序号递增、`trace_id`/`span_id`/`parent_id`/`span_type` span 树、脱敏、失败不阻断、可选按大小轮转 | 本地 JSONL，无采样或远程导出 |
 | `agent/cost.py` | `CostRates` 与 `estimate_cost`：按每千 token 费率估算成本 | 不内置默认价格，结果不是 Provider 账单 |
 | `agent/report.py` | `build_report`：Session、已执行调用、记忆与 Trace 汇总为 Markdown；`markdown_to_html` 就地转换为转义后的独立 HTML | 只读投影，不调用模型、不改 Session、不生成 PDF |
-| `agent/loop.py` | ReAct 循环、终止/取消/迭代与 token 及 wall-clock 预算、上下文重建、检索注入、Session 持久化、恢复、Trace 埋点、耗时与成本与 Diff 聚合 | 无远程 Trace 导出 |
+| `agent/loop.py` | ReAct 循环、终止/取消/迭代与 token、wall-clock 与成本预算、上下文重建、检索注入、Session 持久化、恢复、span 埋点（turn/context/retrieval/model/tool/checkpoint）、耗时与成本与 Diff 聚合 | 无远程 Trace 导出 |
 | `repo_index/index.py` | `chunk_source`：Python 顶层定义优先、行窗口回退；`Bm25Index`、`scores` 与 `SearchHit` | 纯词法基线，不读取磁盘快照 |
 | `repo_index/hybrid.py` | `HybridIndex`：BM25 与向量分数归一化融合、按文件签名增量重建、可选 JSON 快照、embedding 失败降级 | 同步实现，索引构建发生在调用线程 |
 | `repo_index/embedding.py` | `Embedder` 协议、`OpenAIEmbedder` 与 `create_embedder`：标准库 `urllib` 调用 OpenAI 兼容 `/embeddings` | 不引入第三方向量库；远程端点缺少 Key 时返回 `None` |

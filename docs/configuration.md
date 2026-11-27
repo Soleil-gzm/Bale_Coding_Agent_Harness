@@ -97,10 +97,10 @@ Provider 只实现非流式 Chat Completions，`temperature=0`；不支持流式
 |---|---|---|
 | `BALE_CONTEXT_WINDOW` | 单次模型调用的上下文 | 超限时由 `HistoryTrimmer` 按整 Turn 裁剪，并保持 assistant 工具调用与 tool 结果配对 |
 | `--token-budget`（CLI） / `token_budget`（HTTP） | 整个 Turn 的累计 token | 与上下文窗口相互独立；达到预算后 Turn 以预算错误结束 |
-| `--time-budget`（CLI） / `time_budget`（HTTP） | 整个 Turn 的 wall-clock 秒数 | 迭代边界检查剩余时间，并用剩余时间限制单次模型调用；超时以 `time budget exceeded` 失败。工具调用仍受各自 `timeout_ms` 限制 |
+| `--time-budget`（CLI） / `time_budget`（HTTP） | 整个 Turn 的 wall-clock 秒数 | 迭代边界检查剩余时间，并用剩余时间限制单次模型调用、整个工具批次（含审批等待）；批次或其后检查超时都以 `time budget exceeded` 失败，成功的 `finish` 也不能把超预算运行写成 `completed` |
 | `--max-iterations` | ReAct 迭代次数 | CLI 与 HTTP 都限制在 1–500，默认 20 |
-| `--cost-budget`（仅 CLI） | Turn 的成本预算字段 | 当前只随 Turn 记录，运行循环**不做**成本上限拦截；成本估算仍取决于下面的费率 |
-| `BALE_INPUT_COST_PER_1K` + `BALE_OUTPUT_COST_PER_1K` | 成本估算 | 只填一项时 `estimated_cost` 保持 `null` |
+| `--cost-budget`（`bale turn`/`bale run`） / `cost_budget`（HTTP） | Turn 的累计估算成本 | 每次模型调用累加用量后与预算比较，超限以 `cost budget exceeded` 失败；**必须**同时配置下面的费率，否则运行以 `cost budget requires cost rates` 失败（fail-closed，不会静默忽略） |
+| `BALE_INPUT_COST_PER_1K` + `BALE_OUTPUT_COST_PER_1K` | 成本估算 | 只填一项时 `estimated_cost` 保持 `null`；设置成本预算时必须两项齐全 |
 
 Token 数与成本都是确定性估算，不等于 Provider 账单。默认 Fake Provider 的用量为 0。
 

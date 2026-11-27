@@ -47,11 +47,12 @@ Bale Coding Agent Harness 是一个面向 Coding Agent 运行时的项目，目�
 
 ### 追踪与成本
 
-- `JsonlTraceExporter` 以追加方式记录 `turn_started`、`model_call`、`tool_call`、`checkpoint`、`turn_finished`，每条事件带序号、时间戳与耗时。
+- `JsonlTraceExporter` 以追加方式记录 `turn_started`、`context`、`model_call`、`tool_call`、`approval`、`sandbox`、`checkpoint`、`verifier`、`turn_finished`，每条事件带序号、时间戳、耗时，以及 `trace_id`/`span_id`/`parent_id`/`span_type` 组成的 span 树。
 - 追踪默认脱敏：不写完整 Prompt、回答或工具参数，只写 token 数、消息数、工具名、状态和错误码。
 - Trace 写入失败不会改变 Turn 结果；`bale run --trace path.jsonl` 启用，`BALE_TRACE_PATH` 可提供默认路径。
 - `BALE_TRACE_MAX_BYTES` 大于 0 时按文件大小轮转，备份命名为 `trace.jsonl.1`…`.N`，数量由 `BALE_TRACE_BACKUPS`（默认 3）控制；设为 0（默认）保持单一追加文件。
 - 同时配置 `BALE_INPUT_COST_PER_1K` 与 `BALE_OUTPUT_COST_PER_1K` 后，`RunResult.estimated_cost` 给出估算成本；未配置时为 `null`。
+- 设置 `--cost-budget`（或 HTTP `cost_budget`）后，每次模型调用累加用量即与预算比较，超限以 `cost budget exceeded` 失败；未配置费率时 fail-closed，运行直接失败而不是忽略预算。
 
 ### HTTP 执行与 SSE
 
