@@ -1,6 +1,6 @@
 # Bale Coding Agent Harness 快速启动指南
 
-本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时、B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、审批与 ShadowGit）、B3 上下文与会话运行时（Token 预算、历史裁剪、SQLite Session、取消恢复）、B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）、B5 运行报告（Session/Trace 到 Markdown）、B6 本地闭环增强（持久化 Checkpoint 与 `undo`、`session`/`trace` 检查、`chat` 多轮、扩展写入工具、OpenAI 兼容 Provider）、B7 HTTP 执行/SSE 与生产化入口（`/v1/runs`、`/v1/runs/stream`、`/health`、Bearer 认证、按 `run_id` 取消）、B8 检索与评测（AST/行窗口 BM25、`search_code`/`bale search`、`bale eval`、自动上下文注入）、B9 MCP 工具接入（`bale run`/`bale chat`/HTTP）和 FastMCP 文件写入示例。Docker 容器隔离尚未实现；B2a 的本地执行只适用于受控开发场景。默认 Fake 配置不需要模型、数据库服务或容器服务。
+本指南帮助你在本地安装并验证 B0 核心契约、CLI/HTTP Turn 创建入口、B1 只读 ReAct 运行时、B2a 写入运行时（`write_file`/`edit_file`/`shell`/`run_tests`/`git_diff`/`finish`、审批与 ShadowGit）、B3 上下文与会话运行时（Token 预算、历史裁剪、SQLite Session、取消恢复）、B4 追踪与成本运行时（JSONL Trace、耗时与可选成本估算）、B5 运行报告（Session/Trace 到 Markdown）、B6 本地闭环增强（持久化 Checkpoint 与 `undo`、`session`/`trace` 检查、`chat` 多轮、扩展写入工具、OpenAI 兼容 Provider）、B7 HTTP 执行/SSE 与生产化入口（`/v1/runs`、`/v1/runs/stream`、`/health`、Bearer 认证、按 `run_id` 取消）、B8 检索与评测（AST/行窗口 BM25、`search_code`/`bale search`、`bale eval`、自动上下文注入）、B9 MCP 工具接入（`bale run`/`bale chat`/HTTP）和 FastMCP 文件写入示例。Docker 容器隔离已实现（`--sandbox docker`，见 §4.2）；B2a 的本地执行（LocalSandbox）不是安全边界，只适用于受控开发场景。默认 Fake 配置不需要模型、数据库服务或容器服务。
 
 ## 1. 环境要求
 
