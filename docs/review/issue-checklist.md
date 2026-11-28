@@ -12,7 +12,7 @@
 | ID | 严重度 | 标题 | 位置 | 描述 | 状态 | 处理 |
 |---|---|---|---|---|---|---|
 | B1 | 阻断 | `ruff check` 门禁断裂（UP038） | `repo_index/index.py:228`、`repo_index/store.py:88` | 锁文件钉住 `ruff==0.17.6`，`ruff check src tests` 报 2 处 UP038，CI Lint 步骤为红，文档声明的基础检查不通过。 | ✅ 已解决 | 提交 `892ce10` 修复，`ruff check` 现通过。 |
-| B2 | 阻断（环境） | 本地 `.env` 覆盖 provider 破坏默认离线演示 | 仓库根 `.env`（gitignored，未跟踪） | 残留 `.env` 设 `BALE_PROVIDER=openai`，导致默认 `bale run` 联网失败（connection refused）。该文件不在版本控制中。 | ⚠️ 待处理（演示者操作） | 演示前删除/移走 `.env`，或显式 `BALE_PROVIDER=fake`；勿提交含密钥的 `.env`。 |
+| B2 | 阻断（环境） | 本地 `.env` 的 base_url 不可达 | 仓库根 `.env`（gitignored，未跟踪） | `.env` 有意配置 Ollama（qwen3:8b），但 `base_url` 误用 `host.docker.internal:11434`（仅容器内有效，实测宿主机不可达），导致宿主机直跑 `bale run` connection refused。 | ✅ 已解决 | 已将 `base_url` 改为 `localhost:11434`，真实模型 `bale run` 实测通过（14.5s）。Docker 沙箱亦实测可用（13 测试通过）。勿提交含密钥的 `.env`。 |
 
 ---
 
@@ -25,9 +25,9 @@
 | D3 | 中 | E4 完成度表述夸大 | `docs/evaluation/README.md:5` | 称"DR-02 E4 已落地"，但 `docs/evaluation/baselines/` 仅含 `.gitkeep`，无冻结 baseline；`design.md §13.4/§15` 要求 E4 含真实 baseline 与 candidate 对比。 | ✅ 已解决（表述） | 提交 `985b142`：改为 E1–E3 已落地、E4 部分完成。**剩余**：产出首份真实效果 baseline（E4 收尾，见优先级汇总）。 |
 | D4 | 中 | quickstart 陈旧表述 | `docs/quickstart.md:3` | 仍写"Docker 容器隔离尚未实现"，与已实现的 `DockerSandbox` 矛盾。 | ✅ 已解决 | 提交 `7aa66ca`：改为"已实现"，并指向 §4.2。 |
 | D5 | 低 | sandbox 模块 docstring 陈旧 | `src/bale_harness/agent/sandbox.py:9` | 称 Docker 适配器是"later milestone"，但 `DockerSandbox` 已实现。 | ✅ 已解决 | 提交 `26ed5de`：docstring 改为引用 `DockerSandbox`。 |
-| D7 | 低 | 环境产物 | 仓库根 `.env` | 同 B2，本地未跟踪文件影响开箱体验。 | ⚠️ 待处理 | 同 B2（演示者操作）。 |
+| D7 | 低 | 环境配置 | 仓库根 `.env` | 同 B2，本地未跟踪文件的 `base_url` 配置问题。 | ✅ 已解决 | 同 B2，已改 `localhost` 并实测通过。 |
 
-> D1–D5 已于 2026-11-28 全部修复（提交见各行）；D7 为本地环境产物，需演示者自行处理（同 B2）；B1 为代码缺陷，已修复（892ce10）。
+> D1–D5 已于 2026-11-28 全部修复（提交见各行）；B1 为代码缺陷，已修复（892ce10）；B2/D7 为本地环境配置问题，已修正 `.env` 的 `base_url` 并实测通过（真实模型 + Docker 沙箱均验证）。
 
 ---
 

@@ -3,7 +3,7 @@
 - 审查日期：2026-11-28
 - 审查范围：`src/bale_harness/`、`tests/`、`examples/`、根目录配置与 `docs/` 全部文档
 - 基线提交：`60038be`（审查起始）→ 修复提交：`892ce10`
-- 执行环境：Windows 11、Python 3.13.9（文档声明 3.11.18 验证；3.13 同样通过全部测试）、本机无 Docker daemon
+- 执行环境：Windows 11、Python 3.13.9（文档声明 3.11.18 验证；3.13 同样通过全部测试）、Docker 29.9.3 可用（daemon 运行中）、Ollama 运行中（qwen3:8b 等模型已就位）
 - 审查方法：文档基线建立 → 静态映射（CLI/HTTP/环境变量/工具/模块）→ 关键源文件核验 → 运行 `ruff`/`pytest`/`compileall` → CLI 端到端冒烟
 
 ---
@@ -16,7 +16,7 @@
 |---|---|
 | 实现 vs 文档 | 功能实现普遍超前于部分文档表述；发现 **7 处漂移点**（1 处已修复，其余为文档/状态类） |
 | 开发进度 / MVP | **MVP 已完成**。B0–B10 全部落地；评测 DR-02 的 E1–E3 已实现，E4 仅缺"真实效果 baseline 产物" |
-| 测试状态 | `pytest`：**578 passed / 7 skipped / 0 failed**（7 个为 Docker 集成测试，无 Docker 时按设计跳过） |
+| 测试状态 | `pytest`：**578 passed / 7 skipped / 0 failed**（7 个为 Docker 集成测试，默认未设 `BALE_TEST_DOCKER=1` 时跳过）；Docker 实际可用，设 `BALE_TEST_DOCKER=1` 后 13 个 Docker 沙箱测试全过 |
 | 静态检查 | `ruff check` 修复后 **通过**；`ruff format --check` **通过**；`compileall examples` **通过** |
 | 可演示性 | **具备可演示条件**。离线路径（FakeProvider）的 CLI `turn`/`run`/`search` 端到端验证通过；演示前需处理 1 项环境注意事项（见 §4） |
 | 已提交修复 | `892ce10`：修复 2 处 UP038 lint 违规，恢复 `ruff check` 门禁 |
@@ -47,9 +47,9 @@
 | D4 | 中 | 文档表述陈旧 | `docs/quickstart.md:3` | 仍写"**Docker 容器隔离尚未实现**"，与已实现的 `DockerSandbox`（`agent/sandbox.py`，README/configuration/security/architecture B10 均有文档）直接矛盾。 | 删除或改写该句，与 §4.2 已有的 Docker 沙箱说明一致。 |
 | D5 | 低 | 内联文档陈旧 | `src/bale_harness/agent/sandbox.py:9` | 模块 docstring 称"the Docker adapter is a **later milestone**"，但 `DockerSandbox` 已实现。 | 更新 docstring 反映 DockerSandbox 已落地。 |
 | D6 | 高（已修复） | 代码缺陷 | `repo_index/index.py:228`、`repo_index/store.py:88` | `ruff check src tests`（锁文件钉住 `ruff==0.17.6`）报 2 处 UP038，导致 **CI Lint 步骤为红**，文档声明的基础检查不通过。 | ✅ 已在 `892ce10` 修复；`ruff check` 现通过。 |
-| D7 | 低 | 环境产物 | 仓库根 `.env`（gitignored） | 本地存在未跟踪的 `.env`，将 `BALE_PROVIDER` 覆盖为 `openai`，导致默认 `bale run` 尝试联网并失败（connection refused）。该文件不在版本控制中，非仓库缺陷，但影响开箱演示。 | 演示前删除/移走本地 `.env`，或显式 `BALE_PROVIDER=fake`；确保不将含密钥的 `.env` 提交。 |
+| D7 | 低 | 环境配置 | 仓库根 `.env`（gitignored） | 本地 `.env` 是有意配置 Ollama（`BALE_PROVIDER=openai`、`qwen3:8b`），但 `BALE_OPENAI_BASE_URL` 误用 `host.docker.internal:11434`（该主机名仅容器内有效，实测宿主机不可达），导致宿主机直跑 `bale run` connection refused。 | ✅ 已解决：`base_url` 改为 `localhost:11434`，实测真实模型 `bale run` 跑通。注意：勿提交含密钥的 `.env`。 |
 
-> 说明：D1–D5、D7 为文档/状态类漂移，**未修改**，仅在本报告记录并给出建议；D6 为阻断性代码缺陷，已按小步提交原则修复并提交（英文 commit message）。
+> 说明：D1–D5 已于后续提交修复（见 issue-checklist.md）；D6 为阻断性代码缺陷，已修复（892ce10）；D7 为本地环境配置问题，已修正 `.env` 的 `base_url` 并实测通过。
 
 ---
 
@@ -139,13 +139,13 @@
 | # | 阻断项 | 严重度 | 处理方式 | 状态 |
 |---|---|---|---|---|
 | B1 | `ruff check src tests` 失败（UP038）导致 CI Lint 为红 | 阻断 | 已修复并提交 `892ce10` | ✅ 已解决 |
-| B2 | 仓库根本地 `.env` 将 provider 覆盖为 `openai`，默认 `bale run` 联网失败 | 演示阻断（环境） | 演示前删除/移走 `.env`，或运行时显式 `BALE_PROVIDER=fake` | ⚠️ 需演示者操作（非仓库内容） |
+| B2 | 本地 `.env` 的 `base_url` 误用 `host.docker.internal`（仅容器内有效），宿主机直跑 `bale run` 联网失败 | 演示阻断（环境） | 已改为 `localhost:11434`；真实 Ollama 模型 `bale run` 实测通过（`status: completed`，14.5s） | ✅ 已解决 |
 
-> 除上述外，未发现其他阻断核心功能运行的问题。Docker 相关演示（`--sandbox docker`、CI 结构回归）需本机安装 Docker，当前环境无 Docker，7 个相关测试按设计跳过——若演示包含 Docker 沙箱，需提前准备 Docker 环境。
+> 除上述外，未发现其他阻断核心功能运行的问题。Docker 实际可用（29.9.3），设 `BALE_TEST_DOCKER=1` 后 13 个 Docker 沙箱集成测试全部通过；本地已有 `bale-harness:0.1.0` 与 `python:3.11-slim` 镜像，可直接演示 `--sandbox docker`。注意：`--sandbox docker` 只沙箱化工具命令执行，模型调用仍由宿主机 bale 进程发起，故 base_url 用 `localhost`；仅当 bale 整体运行于容器内时才需 `host.docker.internal`。
 
 ### 4.3 演示建议前置检查清单
 
-1. 确认无残留 `.env` 覆盖 `BALE_PROVIDER`（或显式设为 `fake`）。
+1. `.env` 已配置为 Ollama（`localhost:11434` + `qwen3:8b`），真实模型可用；如需离线演示可显式 `BALE_PROVIDER=fake`。
 2. 运行 `ruff check src tests`、`ruff format --check src tests`、`pytest -q` 确认全绿（当前已全绿）。
 3. 若演示真实模型：配置 `BALE_PROVIDER=openai` + 有效端点/Key；本地 Ollama 可免 Key。
 4. 若演示 Docker 沙箱：确认 `docker` 可用，镜像含运行时依赖。
@@ -179,7 +179,9 @@
 |---|---|
 | `python -m ruff check src tests` | 修复前：2 errors（UP038）；修复后：`All checks passed!` |
 | `python -m ruff format --check src tests` | `107 files already formatted` ✅ |
-| `python -m pytest -q` | `578 passed, 7 skipped in 187.10s` ✅（7 skipped = Docker 集成测试，需 `BALE_TEST_DOCKER=1`） |
+| `python -m pytest -q` | `578 passed, 7 skipped in 187.10s` ✅（7 skipped = Docker 集成测试，默认未设 `BALE_TEST_DOCKER=1`；设上后 Docker 沙箱测试 13 passed） |
+| `BALE_TEST_DOCKER=1 pytest tests/test_docker_sandbox.py -q` | `13 passed in 3.05s` ✅（Docker 沙箱实测可用） |
+| `bale run`（真实 Ollama qwen3:8b，local 沙箱） | `status: completed`，1 次工具调用，2580 输入/350 输出 tokens，exit 0 ✅ |
 | `python -m compileall examples` | exit 0 ✅ |
 | `python -m pip check` | exit 1（仅全局环境无关包 `pyopenssl`/`streamlit` 冲突，非项目依赖） |
 | `bale turn --message ... --workspace ...` | exit 0，合法 JSON ✅ |
