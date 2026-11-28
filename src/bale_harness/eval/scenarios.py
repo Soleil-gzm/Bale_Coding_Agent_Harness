@@ -381,7 +381,9 @@ async def _run_recovery(
     auditor = SideEffectAuditor()
     enforcer = _build_approver(task)
     turn = _make_turn(task, workspace)
-    store = SessionStore(workspace / ".bale-recovery.db")
+    # Keep the recovery session DB outside the agent workspace; otherwise the
+    # integrity snapshot counts it as an agent change (max_files/max_lines).
+    store = SessionStore(workspace.parent / ".bale-recovery.db")
 
     first_loop = _build_loop(
         task,
