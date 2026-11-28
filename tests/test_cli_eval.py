@@ -1,6 +1,7 @@
 """CLI tests for the ``eval --suite`` entry point and its gates."""
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -11,11 +12,13 @@ from bale_harness.cli import app
 runner = CliRunner()
 
 VALID_COUNTS = {"read": 5, "edit": 6, "test": 3, "recovery": 3, "security": 3}
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def _output(result) -> str:
-    """Combine stdout and stderr: Click 8.2+ routes usage errors to stderr."""
-    return result.output + (getattr(result, "stderr", "") or "")
+    """Combine streams and strip CI/Rich styling before checking messages."""
+    text = result.output + (getattr(result, "stderr", "") or "")
+    return _ANSI_ESCAPE.sub("", text)
 
 
 def _make_task(task_id: str, category: str, **extra: Any) -> dict[str, Any]:
