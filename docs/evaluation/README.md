@@ -2,7 +2,7 @@
 
 本目录记录 Bale 的固定任务评测方式与结果记录规范。它是一个**确定性回归 harness**：用固定 fixture、固定消息和文件级断言检查 Agent 是否真的完成了修改，而不是模型排行榜。
 
-> **本文档描述当前已实现的 `bale eval` 行为。** DR-02 E1–E3 已落地：20 个 Golden Tasks、F2P/P2P 防作弊、五元组版本指纹、hermetic 标记、preflight 数据质量、baseline 冻结与配对比较。E4 部分完成：CI 结构回归门禁已落地，首份真实效果 baseline 尚未产出（`baselines/` 待补充）。目标架构与尚未落地的部分（如 oracle 移入沙箱）见 [Eval 重设计方案](design.md)。
+> **本文档描述当前已实现的 `bale eval` 行为。** DR-02 E1–E3 已落地：20 个 Golden Tasks、F2P/P2P 防作弊、五元组版本指纹、hermetic 标记、preflight 数据质量、baseline 冻结与配对比较。E4 部分完成：CI 结构回归门禁与首份真实效果 baseline 已落地（`baselines/golden-v1.json`，12/20，见 [baseline 记录](20261128-golden-v1-baseline.md)），尚缺一次 candidate 配对比较。目标架构与尚未落地的部分（如 oracle 移入沙箱）见 [Eval 重设计方案](design.md)。
 
 ## 它做什么 / 不做什么
 
