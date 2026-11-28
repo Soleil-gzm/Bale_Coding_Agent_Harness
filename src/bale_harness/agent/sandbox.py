@@ -6,7 +6,8 @@ environment-variable allowlist, a workspace-bound working directory, an
 enforced timeout, and output truncation.
 
 It is **not** a security boundary. Untrusted code must run in an isolated
-container or virtual machine; the Docker adapter is a later milestone.
+container or virtual machine; see :class:`DockerSandbox` for the container
+adapter.
 """
 
 import asyncio
