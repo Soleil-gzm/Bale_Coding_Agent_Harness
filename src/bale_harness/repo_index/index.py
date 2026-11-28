@@ -225,7 +225,7 @@ def _definition_ranges(tree: ast.Module) -> list[tuple[int, int]]:
     """Return inclusive 1-based line ranges for top-level defs and classes."""
     ranges: list[tuple[int, int]] = []
     for node in tree.body:
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
             continue
         start = min(
             [node.lineno, *(decorator.lineno for decorator in node.decorator_list)]

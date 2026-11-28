@@ -85,7 +85,7 @@ def _parse_vector(value: object) -> list[float] | None:
         raise ValueError("vector must be a list")
     vector: list[float] = []
     for item in value:
-        if isinstance(item, bool) or not isinstance(item, (int, float)):
+        if isinstance(item, bool) or not isinstance(item, int | float):
             raise ValueError("vector values must be numbers")
         vector.append(float(item))
     return vector
