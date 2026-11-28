@@ -157,7 +157,7 @@
 
 ### 高优先级
 1. ~~更新 `design.md` 状态（D1）~~ ✅ `05726c8`；~~修正 `design.md` 死链（D2）~~ ✅ `fb3accc`。
-2. **产出首份真实效果 baseline**（D3 剩余 / E4 收尾，**唯一待做**）：用固定真实模型（本机 Ollama `qwen3:8b` 已验证可用）跑一次 golden suite 并冻结到 `docs/evaluation/baselines/`，再做一次 candidate 配对比较。
+2. ~~产出首份真实效果 baseline~~ ✅ 已完成（`baselines/golden-v1.json`，12/20，hermetic；记录见 `docs/evaluation/20261128-golden-v1-baseline.md`）。**剩余**：做一次 candidate 配对比较以收尾 E4；建议优先修复 recovery 场景的 integrity 假阴性（E4-1）后再跑 candidate（`treatment=harness`）。
 
 ### 中优先级（文档一致性）——已全部完成
 3. ~~修正 `quickstart.md`（D4）与 `sandbox.py` docstring（D5）~~ ✅ `7aa66ca`、`26ed5de`。

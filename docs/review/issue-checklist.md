@@ -67,3 +67,17 @@
 - HTTP 运行历史上限 200（防内存膨胀）✅
 - SSE 路径 `finally` 释放门禁 ✅
 - 测试：578 passed / 7 skipped（Docker）/ 0 failed ✅
+
+---
+
+## 六、E4 baseline 运行新发现（2026-11-28）
+
+首次真实模型 baseline 运行（`golden-v1`，12/20，hermetic）中新发现：
+
+| ID | 类别 | 严重度 | 位置 | 描述 | 状态 | 建议 |
+|---|---|---|---|---|---|---|
+| E4-1 | 评测正确性 | 高 | `src/bale_harness/eval/scenarios.py:384` | recovery 场景把 `SessionStore` 建在 agent 工作区（`workspace / ".bale-recovery.db"`），`integrity.snapshot()` 全量快照工作区后把该 DB 计为 agent 改动，触发 `max_files`/`max_lines` 违规。导致 `recovery-after-write`、`recovery-multi-turn` 在 F2P/P2P/hidden **全通过**时仍被判 failed（假阴性），`recovery-before-write` 亦叠加此违规。 | ⚠️ 待处理 | 将恢复用 SessionStore 移到工作区之外（如 `workspace.parent`），或让 integrity 忽略 harness 自有产物；修复属 `treatment=harness`，修复后重跑 candidate 与 `golden-v1` 配对比较。 |
+| E4-2 | 评测语义 | 中 | `test-bounded-budget` 任务 | oracle 全通过但 `run_status=failed`（达 max iterations=2）→ 任务判 failed。预算边界任务是否应将"达到迭代上限"视为场景成功需复核。 | 📝 待确认 | 复核该任务的场景契约与判定语义，避免与"模型未完成"混淆。 |
+| E4-3 | 稳定性 | 中 | `providers_openai.py` / 本地 Ollama | `edit-add-negative` 因单次模型请求 3 次超时（60s/次）失败，长任务在本地 7B/8B 模型上存在超时抖动。 | 📝 已知限制 | 属环境抖动；如需稳定 baseline，可提高单请求超时或换更强本地模型重跑。 |
+
+> 上述为 baseline 运行（`docs/evaluation/20261128-golden-v1-baseline.md`）的附带发现；E4-1 会直接影响 recovery 分类的真实通过率，建议优先修复。
