@@ -20,14 +20,14 @@
 
 | ID | 严重度 | 标题 | 位置 | 描述 | 状态 | 建议动作 |
 |---|---|---|---|---|---|---|
-| D1 | 高 | 评测设计文档状态滞后 | `docs/evaluation/design.md:4` | 页眉标注"设计待实施"，但 golden v2 suite、runner v2 与 CI 结构回归门禁均已实现，文档与代码/CI 矛盾。 | ⚠️ 待处理 | 更新状态，标注已实现的 E1–E3，仅保留 E4 真实 baseline 为待办。 |
-| D2 | 中 | 文档断裂引用 | `docs/evaluation/design.md:6-7` | 引用的 `../../../docs/eval.md`、`../../../docs/bale-harness-architecture.md` 在仓库中不存在。 | ⚠️ 待处理 | 改为实际存在的路径（如 `docs/architecture.md`、`docs/evaluation/README.md`）或删除。 |
-| D3 | 中 | E4 完成度表述夸大 | `docs/evaluation/README.md:5` | 称"DR-02 E4 已落地"，但 `docs/evaluation/baselines/` 仅含 `.gitkeep`，无冻结 baseline；`design.md §13.4/§15` 要求 E4 含真实 baseline 与 candidate 对比。 | ⚠️ 待处理 | 改为"CI 结构回归门禁已落地；真实效果 baseline 尚未产出"，并尽快产出首份 baseline。 |
-| D4 | 中 | quickstart 陈旧表述 | `docs/quickstart.md:3` | 仍写"Docker 容器隔离尚未实现"，与已实现的 `DockerSandbox` 矛盾。 | ⚠️ 待处理 | 删除/改写该句，与 §4.2 的 Docker 沙箱说明一致。 |
-| D5 | 低 | sandbox 模块 docstring 陈旧 | `src/bale_harness/agent/sandbox.py:9` | 称 Docker 适配器是"later milestone"，但 `DockerSandbox` 已实现。 | ⚠️ 待处理 | 更新 docstring。 |
-| D7 | 低 | 环境产物 | 仓库根 `.env` | 同 B2，本地未跟踪文件影响开箱体验。 | ⚠️ 待处理 | 同 B2。 |
+| D1 | 高 | 评测设计文档状态滞后 | `docs/evaluation/design.md:4` | 页眉标注"设计待实施"，但 golden v2 suite、runner v2 与 CI 结构回归门禁均已实现，文档与代码/CI 矛盾。 | ✅ 已解决 | 提交 `05726c8`：状态改为 E1–E3 已实现、E4 部分完成，§15 勾选已达标项。 |
+| D2 | 中 | 文档断裂引用 | `docs/evaluation/design.md:6-7` | 引用的 `../../../docs/eval.md`、`../../../docs/bale-harness-architecture.md` 在仓库中不存在。 | ✅ 已解决 | 提交 `fb3accc`：方法论标注为外部参考，原始目标改指向本仓库 `architecture.md`。 |
+| D3 | 中 | E4 完成度表述夸大 | `docs/evaluation/README.md:5` | 称"DR-02 E4 已落地"，但 `docs/evaluation/baselines/` 仅含 `.gitkeep`，无冻结 baseline；`design.md §13.4/§15` 要求 E4 含真实 baseline 与 candidate 对比。 | ✅ 已解决（表述） | 提交 `985b142`：改为 E1–E3 已落地、E4 部分完成。**剩余**：产出首份真实效果 baseline（E4 收尾，见优先级汇总）。 |
+| D4 | 中 | quickstart 陈旧表述 | `docs/quickstart.md:3` | 仍写"Docker 容器隔离尚未实现"，与已实现的 `DockerSandbox` 矛盾。 | ✅ 已解决 | 提交 `7aa66ca`：改为"已实现"，并指向 §4.2。 |
+| D5 | 低 | sandbox 模块 docstring 陈旧 | `src/bale_harness/agent/sandbox.py:9` | 称 Docker 适配器是"later milestone"，但 `DockerSandbox` 已实现。 | ✅ 已解决 | 提交 `26ed5de`：docstring 改为引用 `DockerSandbox`。 |
+| D7 | 低 | 环境产物 | 仓库根 `.env` | 同 B2，本地未跟踪文件影响开箱体验。 | ⚠️ 待处理 | 同 B2（演示者操作）。 |
 
-> D1–D5、D7 为文档/状态类，本次审查**未直接修改**（避免越界改文档措辞），仅记录并建议；B1（D6）为代码缺陷已修复。
+> D1–D5 已于 2026-11-28 全部修复（提交见各行）；D7 为本地环境产物，需演示者自行处理（同 B2）；B1 为代码缺陷，已修复（892ce10）。
 
 ---
 
@@ -48,8 +48,8 @@
 
 ## 四、改进建议优先级汇总
 
-1. **高**：修正 `design.md` 状态（D1）与死链（D2）；产出首份真实 baseline 完成 E4（D3）。
-2. **中**：修正 `quickstart.md`（D4）与 `sandbox.py` docstring（D5）；统一 E4 表述（D3）。
+1. **高**：~~修正 `design.md` 状态（D1）与死链（D2）~~ ✅；**待做**：产出首份真实效果 baseline 完成 E4 收尾（D3 剩余工作）。
+2. **中**：~~修正 `quickstart.md`（D4）与 `sandbox.py` docstring（D5）、统一 E4 表述（D3）~~ ✅ 已完成。
 3. **低**：同工作区并发 Run 加文件锁（R4）；评估异步 HTTP 客户端改善取消及时性（R1）；缩小 TOCTOU 窗口（R2）。
 
 ---
